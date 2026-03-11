@@ -13,15 +13,9 @@ COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html
 
-FROM php_base AS vendor
-
-COPY composer.json composer.lock ./
-RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-scripts
-
 FROM php_base AS app
 
 COPY . .
-COPY --from=vendor /var/www/html/vendor ./vendor
 COPY docker/entrypoint.sh /usr/local/bin/getfy-entrypoint
 
 RUN chmod +x /usr/local/bin/getfy-entrypoint \
