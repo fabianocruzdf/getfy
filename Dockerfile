@@ -22,7 +22,7 @@ RUN chmod +x /usr/local/bin/getfy-entrypoint \
     && mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views bootstrap/cache .docker \
     && chmod -R 777 storage bootstrap/cache .docker
 
-EXPOSE 8000
+EXPOSE 80
 
 ENTRYPOINT ["/usr/local/bin/getfy-entrypoint"]
-CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
+CMD ["sh", "-lc", "php artisan serve --host=0.0.0.0 --port=${PORT:-80}"]

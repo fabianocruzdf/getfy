@@ -6,27 +6,28 @@ services:
     image: getfy_app:latest
     restart: unless-stopped
     ports:
-      - "${GETFY_HTTP_PORT:-80}:8000"
+      - "${GETFY_HTTP_PORT:-80}:80"
     volumes:
       - getfy_storage:/var/www/html/storage
       - getfy_env:/var/www/html/.docker
     environment:
-      APP_ENV: ${APP_ENV:-local}
-      APP_DEBUG: ${APP_DEBUG:-true}
-      APP_URL: ${APP_URL:-http://localhost:8000}
-      APP_INSTALLED: ${APP_INSTALLED:-true}
-      APP_AUTO_MIGRATE: ${APP_AUTO_MIGRATE:-false}
-      DB_CONNECTION: ${DB_CONNECTION:-mysql}
-      DB_HOST: ${DB_HOST:-mysql}
-      DB_PORT: ${DB_PORT:-3306}
-      DB_DATABASE: ${DB_DATABASE:-getfy}
-      DB_USERNAME: ${DB_USERNAME:-getfy}
-      DB_PASSWORD: ${DB_PASSWORD:-getfy}
-      REDIS_HOST: ${REDIS_HOST:-redis}
-      REDIS_PORT: ${REDIS_PORT:-6379}
-      CACHE_STORE: ${CACHE_STORE:-redis}
-      QUEUE_CONNECTION: ${QUEUE_CONNECTION:-redis}
-      SESSION_DRIVER: ${SESSION_DRIVER:-file}
+      APP_ENV: ${GETFY_APP_ENV:-local}
+      APP_DEBUG: ${GETFY_APP_DEBUG:-true}
+      APP_URL: ${GETFY_APP_URL:-http://localhost}
+      PORT: "80"
+      APP_INSTALLED: ${GETFY_APP_INSTALLED:-true}
+      APP_AUTO_MIGRATE: ${GETFY_APP_AUTO_MIGRATE:-false}
+      DB_CONNECTION: ${GETFY_DB_CONNECTION:-mysql}
+      DB_HOST: ${GETFY_DB_HOST:-mysql}
+      DB_PORT: ${GETFY_DB_PORT:-3306}
+      DB_DATABASE: ${GETFY_DB_DATABASE:-getfy}
+      DB_USERNAME: ${GETFY_DB_USERNAME:-getfy}
+      DB_PASSWORD: ${GETFY_DB_PASSWORD:-getfy}
+      REDIS_HOST: ${GETFY_REDIS_HOST:-redis}
+      REDIS_PORT: ${GETFY_REDIS_PORT:-6379}
+      CACHE_STORE: ${GETFY_CACHE_STORE:-redis}
+      QUEUE_CONNECTION: ${GETFY_QUEUE_CONNECTION:-redis}
+      SESSION_DRIVER: ${GETFY_SESSION_DRIVER:-file}
       GETFY_DOCKER: "true"
       GETFY_RUN_SETUP: "true"
     depends_on:
@@ -39,10 +40,10 @@ services:
     image: mysql:8.0
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-${DB_DATABASE:-getfy}}
-      MYSQL_USER: ${MYSQL_USER:-${DB_USERNAME:-getfy}}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-${DB_PASSWORD:-getfy}}
+      MYSQL_ROOT_PASSWORD: ${GETFY_MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${GETFY_MYSQL_DATABASE:-${GETFY_DB_DATABASE:-getfy}}
+      MYSQL_USER: ${GETFY_MYSQL_USER:-${GETFY_DB_USERNAME:-getfy}}
+      MYSQL_PASSWORD: ${GETFY_MYSQL_PASSWORD:-${GETFY_DB_PASSWORD:-getfy}}
     ports:
       - "3307:3306"
     volumes:
@@ -72,22 +73,22 @@ services:
       - getfy_storage:/var/www/html/storage
       - getfy_env:/var/www/html/.docker
     environment:
-      APP_ENV: ${APP_ENV:-local}
-      APP_DEBUG: ${APP_DEBUG:-true}
-      APP_URL: ${APP_URL:-http://localhost:8000}
-      APP_INSTALLED: ${APP_INSTALLED:-true}
-      APP_AUTO_MIGRATE: ${APP_AUTO_MIGRATE:-false}
-      DB_CONNECTION: ${DB_CONNECTION:-mysql}
-      DB_HOST: ${DB_HOST:-mysql}
-      DB_PORT: ${DB_PORT:-3306}
-      DB_DATABASE: ${DB_DATABASE:-getfy}
-      DB_USERNAME: ${DB_USERNAME:-getfy}
-      DB_PASSWORD: ${DB_PASSWORD:-getfy}
-      REDIS_HOST: ${REDIS_HOST:-redis}
-      REDIS_PORT: ${REDIS_PORT:-6379}
-      CACHE_STORE: ${CACHE_STORE:-redis}
-      QUEUE_CONNECTION: ${QUEUE_CONNECTION:-redis}
-      SESSION_DRIVER: ${SESSION_DRIVER:-file}
+      APP_ENV: ${GETFY_APP_ENV:-local}
+      APP_DEBUG: ${GETFY_APP_DEBUG:-true}
+      APP_URL: ${GETFY_APP_URL:-http://localhost}
+      APP_INSTALLED: ${GETFY_APP_INSTALLED:-true}
+      APP_AUTO_MIGRATE: ${GETFY_APP_AUTO_MIGRATE:-false}
+      DB_CONNECTION: ${GETFY_DB_CONNECTION:-mysql}
+      DB_HOST: ${GETFY_DB_HOST:-mysql}
+      DB_PORT: ${GETFY_DB_PORT:-3306}
+      DB_DATABASE: ${GETFY_DB_DATABASE:-getfy}
+      DB_USERNAME: ${GETFY_DB_USERNAME:-getfy}
+      DB_PASSWORD: ${GETFY_DB_PASSWORD:-getfy}
+      REDIS_HOST: ${GETFY_REDIS_HOST:-redis}
+      REDIS_PORT: ${GETFY_REDIS_PORT:-6379}
+      CACHE_STORE: ${GETFY_CACHE_STORE:-redis}
+      QUEUE_CONNECTION: ${GETFY_QUEUE_CONNECTION:-redis}
+      SESSION_DRIVER: ${GETFY_SESSION_DRIVER:-file}
       GETFY_DOCKER: "true"
       GETFY_RUN_SETUP: "false"
     depends_on:
@@ -104,22 +105,22 @@ services:
       - getfy_storage:/var/www/html/storage
       - getfy_env:/var/www/html/.docker
     environment:
-      APP_ENV: ${APP_ENV:-local}
-      APP_DEBUG: ${APP_DEBUG:-true}
-      APP_URL: ${APP_URL:-http://localhost:8000}
-      APP_INSTALLED: ${APP_INSTALLED:-true}
-      APP_AUTO_MIGRATE: ${APP_AUTO_MIGRATE:-false}
-      DB_CONNECTION: ${DB_CONNECTION:-mysql}
-      DB_HOST: ${DB_HOST:-mysql}
-      DB_PORT: ${DB_PORT:-3306}
-      DB_DATABASE: ${DB_DATABASE:-getfy}
-      DB_USERNAME: ${DB_USERNAME:-getfy}
-      DB_PASSWORD: ${DB_PASSWORD:-getfy}
-      REDIS_HOST: ${REDIS_HOST:-redis}
-      REDIS_PORT: ${REDIS_PORT:-6379}
-      CACHE_STORE: ${CACHE_STORE:-redis}
-      QUEUE_CONNECTION: ${QUEUE_CONNECTION:-redis}
-      SESSION_DRIVER: ${SESSION_DRIVER:-file}
+      APP_ENV: ${GETFY_APP_ENV:-local}
+      APP_DEBUG: ${GETFY_APP_DEBUG:-true}
+      APP_URL: ${GETFY_APP_URL:-http://localhost}
+      APP_INSTALLED: ${GETFY_APP_INSTALLED:-true}
+      APP_AUTO_MIGRATE: ${GETFY_APP_AUTO_MIGRATE:-false}
+      DB_CONNECTION: ${GETFY_DB_CONNECTION:-mysql}
+      DB_HOST: ${GETFY_DB_HOST:-mysql}
+      DB_PORT: ${GETFY_DB_PORT:-3306}
+      DB_DATABASE: ${GETFY_DB_DATABASE:-getfy}
+      DB_USERNAME: ${GETFY_DB_USERNAME:-getfy}
+      DB_PASSWORD: ${GETFY_DB_PASSWORD:-getfy}
+      REDIS_HOST: ${GETFY_REDIS_HOST:-redis}
+      REDIS_PORT: ${GETFY_REDIS_PORT:-6379}
+      CACHE_STORE: ${GETFY_CACHE_STORE:-redis}
+      QUEUE_CONNECTION: ${GETFY_QUEUE_CONNECTION:-redis}
+      SESSION_DRIVER: ${GETFY_SESSION_DRIVER:-file}
       GETFY_DOCKER: "true"
       GETFY_RUN_SETUP: "false"
     depends_on:
