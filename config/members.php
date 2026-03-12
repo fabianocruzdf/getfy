@@ -18,7 +18,7 @@ return [
     |--------------------------------------------------------------------------
     */
     'push' => [
-        'vapid_public' => env('VAPID_PUBLIC_KEY', ''),
-        'vapid_private' => env('VAPID_PRIVATE_KEY', ''),
+        'vapid_public' => env('PWA_VAPID_PUBLIC', ''),
+        'vapid_private' => env('PWA_VAPID_PRIVATE', ''),
     ],
 ];

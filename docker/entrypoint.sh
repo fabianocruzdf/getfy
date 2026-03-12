@@ -19,6 +19,7 @@ rm -f public/hot 2>/dev/null || true
 php -r '
 $envFile = ".env";
 $content = file_exists($envFile) ? (string) file_get_contents($envFile) : "";
+$content = str_replace("\r\n", "\n", $content);
 $setupDoneInEnv = (bool) preg_match("/^\\s*DOCKER_SETUP_DONE\\s*=\\s*[\"\\x27]?true[\"\\x27]?\\s*(?:#|$)/mi", $content);
 $sharedAppUrl = trim((string) @file_get_contents(".docker/app.url"));
 $setupDoneShared = is_file(".docker/setup.done") && $sharedAppUrl !== "" && preg_match("#^https?://#i", $sharedAppUrl);
@@ -26,7 +27,7 @@ $setupDone = $setupDoneInEnv || $setupDoneShared;
 
 $existingAppUrl = null;
 if (preg_match("/^\\s*APP_URL\\s*=\\s*(.+)\\s*$/mi", $content, $m)) {
-    $existingAppUrl = trim((string) ($m[1] ?? ""), " \\t\\n\\r\\0\\x0B\\\"\\x27");
+    $existingAppUrl = trim((string) ($m[1] ?? ""), " \\t\\n\\r\\0\\x0B\\\"\\x27`");
 }
 $appUrl = $setupDone ? ($sharedAppUrl !== "" ? $sharedAppUrl : $existingAppUrl) : ((getenv("GETFY_APP_URL") ?: getenv("APP_URL")) ?: "http://localhost");
 $vars = [
@@ -57,14 +58,14 @@ foreach ($vars as $key => $value) {
         continue;
     }
     $value = (string) $value;
-    $needsQuotes = (bool) preg_match("/\\s|#|\"|\\x27/", $value);
+    $needsQuotes = (bool) preg_match("/\\s|#|\"|\\x27|`/", $value);
     if ($value === "null") {
         $line = $key . "=null";
     } else {
         $escaped = $needsQuotes ? ("\"" . str_replace("\"", "\\\"", $value) . "\"") : $value;
         $line = $key . "=" . $escaped;
     }
-    $pattern = "/^" . preg_quote($key, "/") . "=.*/m";
+    $pattern = "/^\\s*" . preg_quote($key, "/") . "\\s*=.*$/m";
     if (preg_match($pattern, $content)) {
         $content = (string) preg_replace($pattern, $line, $content);
     } else {
@@ -100,6 +101,9 @@ if [ "${GETFY_RUN_SETUP:-true}" = "true" ]; then
   fi
   php artisan package:discover --ansi
   php artisan migrate --force
+  if ! php -r '$c = (string) @file_get_contents(".env"); exit((preg_match("/^\\s*PWA_VAPID_PUBLIC\\s*=\\s*\\S+/m", $c) && preg_match("/^\\s*PWA_VAPID_PRIVATE\\s*=\\s*\\S+/m", $c)) ? 0 : 1);' >/dev/null 2>&1; then
+    php artisan pwa:vapid || true
+  fi
 fi
 
 exec "$@"
