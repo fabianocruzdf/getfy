@@ -1,6 +1,6 @@
 # Getfy (Open Source)
 
-Plataforma Laravel para checkout, área de membros e painel administrativo.
+Plataforma Laravel + Vue para checkout, área de membros e estrutura completa de pagamentos.
 
 ## Instalação rápida
 
