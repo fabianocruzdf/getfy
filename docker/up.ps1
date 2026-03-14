@@ -45,7 +45,7 @@ if (!(Test-Path $envFile)) {
         GETFY_MYSQL_USER = $dbUser
         GETFY_MYSQL_PASSWORD = $dbPass
         GETFY_MYSQL_ROOT_PASSWORD = $rootPass
-        GETFY_QUEUE_CONNECTION = if ($env:GETFY_QUEUE_CONNECTION) { $env:GETFY_QUEUE_CONNECTION } else { "database" }
+        GETFY_QUEUE_CONNECTION = if ($env:GETFY_QUEUE_CONNECTION) { $env:GETFY_QUEUE_CONNECTION } else { "redis" }
         GETFY_CACHE_STORE = if ($env:GETFY_CACHE_STORE) { $env:GETFY_CACHE_STORE } else { "redis" }
         GETFY_SESSION_DRIVER = if ($env:GETFY_SESSION_DRIVER) { $env:GETFY_SESSION_DRIVER } else { "file" }
         GETFY_MYSQL_INNODB_BUFFER_POOL_SIZE = if ($env:GETFY_MYSQL_INNODB_BUFFER_POOL_SIZE) { $env:GETFY_MYSQL_INNODB_BUFFER_POOL_SIZE } else { "256M" }
