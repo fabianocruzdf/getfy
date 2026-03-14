@@ -86,4 +86,4 @@ foreach ($f in $composeFiles) {
     $composeArgs += @("-f", $f)
 }
 
-docker compose @composeArgs --env-file $envFile up --build -d
+docker compose @composeArgs --env-file $envFile up --build -d --remove-orphans
