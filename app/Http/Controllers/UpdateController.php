@@ -223,8 +223,10 @@ class UpdateController extends Controller
 
         // 2. Composer install (usar PHP explícito quando disponível, para evitar "php não reconhecido" no servidor web)
         $composerCmd = 'composer install --no-interaction --no-dev';
-        if ($phpBinary !== null && $phpBinary !== '' && is_file($phpBinary)) {
-            $composerCmd = '"' . $phpBinary . '" vendor' . DIRECTORY_SEPARATOR . 'bin' . DIRECTORY_SEPARATOR . 'composer install --no-interaction --no-dev';
+        $vendorComposer = $basePath . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'bin' . DIRECTORY_SEPARATOR . 'composer';
+        if ($phpBinary !== null && $phpBinary !== '' && is_file($phpBinary) && is_file($vendorComposer)) {
+            $vendorComposerRelative = 'vendor' . DIRECTORY_SEPARATOR . 'bin' . DIRECTORY_SEPARATOR . 'composer';
+            $composerCmd = '"' . $phpBinary . '" ' . $vendorComposerRelative . ' install --no-interaction --no-dev';
         }
         if (! $runStep($composerCmd, 'Composer install')) {
             $last = end($steps);
