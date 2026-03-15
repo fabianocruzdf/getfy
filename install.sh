@@ -111,10 +111,22 @@ if [ -e "$INSTALL_DIR" ] && [ ! -d "$INSTALL_DIR" ]; then
 fi
 
 if [ -d "$INSTALL_DIR/.git" ]; then
-  $SUDO git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL" >/dev/null 2>&1 || true
-  $SUDO git -C "$INSTALL_DIR" fetch --all --prune
-  $SUDO git -C "$INSTALL_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
-  $SUDO git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
+  GIT_BASE=(git -c safe.directory="$INSTALL_DIR" -C "$INSTALL_DIR")
+  $SUDO "${GIT_BASE[@]}" remote set-url origin "$REPO_URL" >/dev/null 2>&1 || true
+  HAS_LOCAL_CHANGES=0
+  if [ -n "$($SUDO "${GIT_BASE[@]}" status --porcelain 2>/dev/null || true)" ]; then
+    HAS_LOCAL_CHANGES=1
+    $SUDO "${GIT_BASE[@]}" stash push -u -m "getfy-install" >/dev/null 2>&1 || true
+  fi
+  $SUDO "${GIT_BASE[@]}" fetch --all --prune
+  $SUDO "${GIT_BASE[@]}" checkout -B "$BRANCH" "origin/$BRANCH"
+  $SUDO "${GIT_BASE[@]}" reset --hard "origin/$BRANCH"
+  if [ "$HAS_LOCAL_CHANGES" -eq 1 ]; then
+    if ! $SUDO "${GIT_BASE[@]}" stash pop >/dev/null 2>&1; then
+      echo "Aviso: havia alterações locais. O instalador fez stash, mas não conseguiu reaplicar automaticamente." >&2
+      echo "Para ver e resolver manualmente: cd \"$INSTALL_DIR\" && git stash list && git stash show -p" >&2
+    fi
+  fi
 else
   $SUDO mkdir -p "$(dirname "$INSTALL_DIR")"
   $SUDO git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
