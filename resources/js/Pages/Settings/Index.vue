@@ -173,7 +173,9 @@ async function checkIntegrity() {
     integrityLoading.value = true;
     integrityResult.value = null;
     try {
-        const res = await window.axios.get('/configuracoes/update/integrity');
+        const res = await window.axios.post('/configuracoes/update/run', { action: 'integrity' }, {
+            headers: { Accept: 'application/json' },
+        });
         integrityResult.value = res.data;
     } catch (e) {
         integrityResult.value = {
@@ -194,7 +196,7 @@ async function runMigrations() {
     migrateLoading.value = true;
     migrateResult.value = null;
     try {
-        const res = await window.axios.post('/configuracoes/update/migrate', {}, {
+        const res = await window.axios.post('/configuracoes/update/run', { action: 'migrate' }, {
             headers: { Accept: 'application/json' },
         });
         migrateResult.value = res.data;

@@ -532,6 +532,16 @@ class UpdateController extends Controller
                 ->with('error', 'Atualizações pela interface estão desativadas.');
         }
 
+        $action = $request->input('action');
+        if ($request->wantsJson() && is_string($action) && $action !== '') {
+            if ($action === 'integrity') {
+                return $this->integrity();
+            }
+            if ($action === 'migrate') {
+                return $this->migrateNow($request);
+            }
+        }
+
         $basePath = base_path();
         $branch = config('getfy.update_branch', 'main');
         $expectedRepo = config('getfy.update_repository_url', 'https://github.com/getfy-opensource/getfy.git');
