@@ -22,9 +22,9 @@ $content = file_exists($envFile) ? (string) file_get_contents($envFile) : "";
 $content = str_replace("\r\n", "\n", $content);
 $setupDoneInEnv = (bool) preg_match("/^\\s*DOCKER_SETUP_DONE\\s*=\\s*[\"\\x27]?true[\"\\x27]?\\s*(?:#|$)/mi", $content);
 $sharedAppUrl = trim((string) @file_get_contents(".docker/app.url"));
-$sharedAppUrl = trim($sharedAppUrl, " \t\n\r\0\x0B\"'`");
+$sharedAppUrl = trim($sharedAppUrl, " \t\n\r\0\x0B\"`");
 $sharedAppUrl = str_replace(["\r", "\n", "\t"], "", $sharedAppUrl);
-$sharedAppUrl = str_replace(["`", "\"", "'"], "", $sharedAppUrl);
+$sharedAppUrl = str_replace(["`", "\"", "\x27"], "", $sharedAppUrl);
 $setupDoneShared = is_file(".docker/setup.done") && $sharedAppUrl !== "" && preg_match("#^https?://#i", $sharedAppUrl);
 $setupDone = $setupDoneInEnv || $setupDoneShared;
 
