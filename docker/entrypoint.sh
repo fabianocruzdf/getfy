@@ -22,6 +22,9 @@ $content = file_exists($envFile) ? (string) file_get_contents($envFile) : "";
 $content = str_replace("\r\n", "\n", $content);
 $setupDoneInEnv = (bool) preg_match("/^\\s*DOCKER_SETUP_DONE\\s*=\\s*[\"\\x27]?true[\"\\x27]?\\s*(?:#|$)/mi", $content);
 $sharedAppUrl = trim((string) @file_get_contents(".docker/app.url"));
+$sharedAppUrl = trim($sharedAppUrl, " \t\n\r\0\x0B\"'`");
+$sharedAppUrl = str_replace(["\r", "\n", "\t"], "", $sharedAppUrl);
+$sharedAppUrl = str_replace(["`", "\"", "'"], "", $sharedAppUrl);
 $setupDoneShared = is_file(".docker/setup.done") && $sharedAppUrl !== "" && preg_match("#^https?://#i", $sharedAppUrl);
 $setupDone = $setupDoneInEnv || $setupDoneShared;
 
@@ -38,6 +41,12 @@ if (!is_string($cronSecret) || $cronSecret === "") {
     $cronSecret = rtrim(strtr(base64_encode(random_bytes(24)), "+/", "-_"), "=");
 }
 $appUrl = $setupDone ? ($sharedAppUrl !== "" ? $sharedAppUrl : $existingAppUrl) : ((getenv("GETFY_APP_URL") ?: getenv("APP_URL")) ?: "http://localhost");
+$parts = parse_url((string) $appUrl);
+$scheme = strtolower((string) ($parts["scheme"] ?? ""));
+$host = strtolower((string) ($parts["host"] ?? ""));
+if ($scheme === "http" && $host !== "" && $host !== "localhost" && $host !== "127.0.0.1" && $host !== "::1" && filter_var($host, FILTER_VALIDATE_IP) === false) {
+    $appUrl = "https://" . $host;
+}
 $vars = [
     "APP_NAME" => getenv("APP_NAME") ?: "Getfy",
     "APP_ENV" => getenv("APP_ENV") ?: "local",

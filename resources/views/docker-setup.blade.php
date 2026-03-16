@@ -54,13 +54,16 @@
                             name="domain"
                             type="text"
                             value="{{ old('domain', $host) }}"
-                            placeholder="ex: api.seudominio.com"
+                            placeholder="ex: pay.seudominio.com"
                             class="mt-1.5 block w-full rounded-xl border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 px-4 py-3 text-zinc-900 dark:text-white placeholder-zinc-500 shadow-sm transition hover:border-primary focus:border-primary"
                             autocomplete="off"
                             required
                         />
                         <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                            URL detectada: <span class="font-mono">{{ $suggested_url }}</span>
+                            A plataforma vai salvar: <span class="font-mono">{{ $suggested_url }}</span>
+                        </p>
+                        <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                            Dica: digite apenas o domínio (sem http/https). Se você colar uma URL, ela será normalizada automaticamente.
                         </p>
                     </div>
 
