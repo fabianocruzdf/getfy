@@ -62,7 +62,12 @@ class ApiCheckoutController extends Controller
         $paymentService = app(PaymentService::class);
         $tenantId = $app->tenant_id;
         $pixEnabled = ! empty($pg['pix']);
-        $pixAutoEnabled = ! empty($pg['pix_auto']) && $productModel !== null && ($productModel->billing_type ?? null) === Product::BILLING_SUBSCRIPTION;
+        $pixAutoEnabled = ! empty($pg['pix_auto']) && $productModel !== null
+            && (
+                ($productModel->billing_type ?? null) === Product::BILLING_SUBSCRIPTION
+                || ! empty($session->subscription_plan_id)
+                || $productModel->subscriptionPlans()->exists()
+            );
         $cardEnabled = ! empty($pg['card']);
         $boletoEnabled = ! empty($pg['boleto']);
 
