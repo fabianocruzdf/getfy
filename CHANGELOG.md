@@ -20,8 +20,7 @@
 - Helper `createTestProduct()` na suíte de testes para SQLite (compatível com `products.id` inteiro em ambiente de testes).
 - Testes de feature `AccessEmailPasswordBlockTest` (Mail fake) para o bloco de credenciais e ausência de duplicação.
 - Testes de feature: `payment_intent.succeeded` (Stripe) em `ProcessPaymentWebhook` e prop `has_bearer_token` na página Integrações.
-- Gateway **CajuPay** (PIX, Brasil): novo provedor com `CajuPayDriver` — autenticação **X-API-Key** / **X-API-Secret** (par gerado no painel CajuPay, API / Chaves), campos **chave pública** e **chave secreta** em Integrações → Gateways; criação de cobrança PIX (`POST /api/payments/pix` com cabeçalho `Idempotency-Key`), consulta de status em `GET /api/payments` para polling do checkout e reconfirmação em fluxos de webhook; teste de conexão via `GET /api/wallet/balance`; registrado em `config/gateways.php` como primeiro gateway na lista e na ordem padrão de redundância PIX (`default_order`); imagem `public/images/gateways/cajupay.png`; URL base opcional `CAJUPAY_API_BASE_URL` no `.env`.
-- Integrações (gateways): no card e no painel lateral da CajuPay, badge **D+0** ao lado do nome com tooltip sobre liquidação no mesmo dia útil.
+- Novo Gateway **CajuPay**
 
 ### Fixed
 
