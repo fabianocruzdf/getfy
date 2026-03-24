@@ -9,29 +9,41 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class PluginInstallController extends Controller
 {
+    private function pluginsIndexRedirect(array $flash = []): RedirectResponse
+    {
+        $response = redirect()->route('plugins.index', ['tab' => 'installed']);
+        if ($flash !== []) {
+            $response->with($flash);
+        }
+
+        return $response;
+    }
+
     public function __invoke(Request $request, string $slug): RedirectResponse
     {
         if (! preg_match('/^[a-z0-9\-]+$/i', $slug)) {
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Slug inválido.');
+            return $this->pluginsIndexRedirect(['error' => 'Slug inválido.']);
         }
 
         if (! class_exists('ZipArchive')) {
-            return redirect()->route('plugins.index', ['tab' => 'store'])
-                ->with('error', 'A extensão PHP Zip não está habilitada. Baixe o plugin e instale manualmente ou habilite a extensão no php.ini.')
-                ->with('zip_unavailable', true);
+            return $this->pluginsIndexRedirect([
+                'error' => 'A extensão PHP Zip não está habilitada. Baixe o plugin e instale manualmente ou habilite a extensão no php.ini.',
+                'zip_unavailable' => true,
+            ]);
         }
 
         $store = app(PluginStoreService::class);
-        if (! $store->isConfigured()) {
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Loja de plugins não configurada.');
+        $useUploadedFile = $request->hasFile('plugin_zip');
+        if (! $useUploadedFile && ! $store->isConfigured()) {
+            return $this->pluginsIndexRedirect(['error' => 'Loja de plugins não configurada. Envie o ZIP em “Instalar plugin (ZIP)” na aba Instalados.']);
         }
 
         $tempFile = null;
-        $useUploadedFile = $request->hasFile('plugin_zip');
 
         if ($useUploadedFile) {
             $upload = $request->file('plugin_zip');
@@ -39,16 +51,18 @@ class PluginInstallController extends Controller
             $mime = $upload->getMimeType();
             $zipMimes = ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'];
             if ($ext !== 'zip' && ! in_array($mime, $zipMimes, true)) {
-                return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Arquivo do plugin deve ser um ZIP.');
+                return $this->pluginsIndexRedirect(['error' => 'Arquivo do plugin deve ser um ZIP.']);
             }
-            $tempFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'plugin_' . $slug . '_' . Str::random(8) . '.zip';
-            move_uploaded_file($upload->getRealPath(), $tempFile);
+            $tempFile = $this->persistUploadedZipToLocalTemp($upload);
+            if ($tempFile === null) {
+                return $this->pluginsIndexRedirect(['error' => 'Não foi possível salvar o arquivo enviado. Verifique permissões de storage/app.']);
+            }
         } else {
             $downloadUrl = $request->input('download_url');
             if ($downloadUrl && is_string($downloadUrl)) {
                 $storeBase = $store->getBaseUrl();
                 if ($storeBase === '' || (! str_starts_with($downloadUrl, $storeBase . '/') && ! str_starts_with($downloadUrl, $storeBase . '?'))) {
-                    return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Link de download inválido.');
+                    return $this->pluginsIndexRedirect(['error' => 'Link de download inválido.']);
                 }
                 $download = ['download_url' => $downloadUrl, 'expires_at' => ''];
             } else {
@@ -60,7 +74,7 @@ class PluginInstallController extends Controller
                     $message = $reason
                         ? 'Não foi possível obter o link de download: ' . $reason
                         : 'Não foi possível obter o link de download. Verifique se o plugin é gratuito ou se o token de compra é válido.';
-                    return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', $message);
+                    return $this->pluginsIndexRedirect(['error' => $message]);
                 }
             }
 
@@ -70,24 +84,24 @@ class PluginInstallController extends Controller
                 $realPluginsPath = realpath(File::isDirectory($pluginsPath) ? $pluginsPath : (File::makeDirectory($pluginsPath, 0755, true) ? $pluginsPath : ''));
             }
             if (! $realPluginsPath || ! is_dir($realPluginsPath)) {
-                return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Pasta de plugins indisponível.');
+                return $this->pluginsIndexRedirect(['error' => 'Pasta de plugins indisponível.']);
             }
 
-            $tempFile = tempnam(sys_get_temp_dir(), 'plugin_' . $slug . '_');
+            $tempFile = tempnam($this->writableTempDirectory(), 'plugin_' . $slug . '_');
             if ($tempFile === false) {
-                return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Erro ao criar arquivo temporário.');
+                return $this->pluginsIndexRedirect(['error' => 'Erro ao criar arquivo temporário.']);
             }
 
             try {
                 $response = Http::timeout(60)->withOptions(['sink' => $tempFile])->get($download['download_url']);
                 if (! $response->successful()) {
                     @unlink($tempFile);
-                    return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Falha ao baixar o plugin.');
+                    return $this->pluginsIndexRedirect(['error' => 'Falha ao baixar o plugin.']);
                 }
             } catch (\Throwable $e) {
                 @unlink($tempFile);
                 report($e);
-                return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Erro ao baixar o plugin.');
+                return $this->pluginsIndexRedirect(['error' => 'Erro ao baixar o plugin.']);
             }
         }
 
@@ -103,7 +117,7 @@ class PluginInstallController extends Controller
             if ($tempFile && is_file($tempFile)) {
                 @unlink($tempFile);
             }
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Pasta de plugins indisponível.');
+            return $this->pluginsIndexRedirect(['error' => 'Pasta de plugins indisponível.']);
         }
 
         $error = $this->extractZipToPlugins($tempFile, $slug, $pluginsPath, $realPluginsPath);
@@ -112,7 +126,7 @@ class PluginInstallController extends Controller
         }
 
         return $this->registerAndRunMigrations($slug)
-            ?? redirect()->route('plugins.index', ['tab' => 'store'])->with('success', 'Plugin instalado com sucesso.');
+            ?? $this->pluginsIndexRedirect(['success' => 'Plugin instalado com sucesso.']);
     }
 
     /**
@@ -121,13 +135,14 @@ class PluginInstallController extends Controller
     public function installFromZip(Request $request): RedirectResponse
     {
         if (! class_exists('ZipArchive')) {
-            return redirect()->route('plugins.index', ['tab' => 'store'])
-                ->with('error', 'A extensão PHP Zip não está habilitada.')
-                ->with('zip_unavailable', true);
+            return $this->pluginsIndexRedirect([
+                'error' => 'A extensão PHP Zip não está habilitada.',
+                'zip_unavailable' => true,
+            ]);
         }
 
         if (! $request->hasFile('plugin_zip')) {
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Envie o arquivo ZIP do plugin.');
+            return $this->pluginsIndexRedirect(['error' => 'Envie o arquivo ZIP do plugin.']);
         }
 
         $upload = $request->file('plugin_zip');
@@ -135,18 +150,18 @@ class PluginInstallController extends Controller
         $mime = $upload->getMimeType();
         $zipMimes = ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'];
         if ($ext !== 'zip' && ! in_array($mime, $zipMimes, true)) {
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Arquivo do plugin deve ser um ZIP.');
+            return $this->pluginsIndexRedirect(['error' => 'Arquivo do plugin deve ser um ZIP.']);
         }
 
-        $tempFile = tempnam(sys_get_temp_dir(), 'plugin_zip_');
-        if ($tempFile === false || ! move_uploaded_file($upload->getRealPath(), $tempFile)) {
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Erro ao salvar o arquivo.');
+        $tempFile = $this->persistUploadedZipToLocalTemp($upload);
+        if ($tempFile === null) {
+            return $this->pluginsIndexRedirect(['error' => 'Erro ao salvar o arquivo. Verifique permissões de storage/app.']);
         }
 
         $zip = new \ZipArchive;
         if ($zip->open($tempFile) !== true) {
             @unlink($tempFile);
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Arquivo do plugin inválido.');
+            return $this->pluginsIndexRedirect(['error' => 'Arquivo do plugin inválido.']);
         }
 
         $entries = [];
@@ -155,7 +170,7 @@ class PluginInstallController extends Controller
             if (str_contains($name, '..')) {
                 $zip->close();
                 @unlink($tempFile);
-                return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Arquivo do plugin inválido.');
+                return $this->pluginsIndexRedirect(['error' => 'Arquivo do plugin inválido.']);
             }
             $entries[] = $name;
         }
@@ -178,13 +193,13 @@ class PluginInstallController extends Controller
 
         if (! $baseInZip || $baseInZip === '') {
             @unlink($tempFile);
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'O ZIP deve conter uma única pasta raiz (ex: meu-plugin/plugin.json).');
+            return $this->pluginsIndexRedirect(['error' => 'O ZIP deve conter uma única pasta raiz (ex: meu-plugin/plugin.json).']);
         }
 
         $slug = strtolower(preg_replace('/[^a-z0-9\-]/', '', str_replace('_', '-', $baseInZip)));
         if ($slug === '') {
             @unlink($tempFile);
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Não foi possível identificar o nome do plugin a partir do ZIP.');
+            return $this->pluginsIndexRedirect(['error' => 'Não foi possível identificar o nome do plugin a partir do ZIP.']);
         }
 
         $pluginsPath = base_path('plugins');
@@ -197,7 +212,7 @@ class PluginInstallController extends Controller
         }
         if (! $realPluginsPath || ! is_dir($realPluginsPath)) {
             @unlink($tempFile);
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Pasta de plugins indisponível.');
+            return $this->pluginsIndexRedirect(['error' => 'Pasta de plugins indisponível.']);
         }
 
         $error = $this->extractZipToPlugins($tempFile, $slug, $pluginsPath, $realPluginsPath);
@@ -206,7 +221,7 @@ class PluginInstallController extends Controller
         }
 
         return $this->registerAndRunMigrations($slug)
-            ?? redirect()->route('plugins.index', ['tab' => 'store'])->with('success', 'Plugin instalado com sucesso.');
+            ?? $this->pluginsIndexRedirect(['success' => 'Plugin instalado com sucesso.']);
     }
 
     /**
@@ -228,7 +243,7 @@ class PluginInstallController extends Controller
             });
         }
         if (! $plugin) {
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Plugin não encontrado após extração.');
+            return $this->pluginsIndexRedirect(['error' => 'Plugin não encontrado após extração.']);
         }
 
         $pluginSlug = $plugin['slug'];
@@ -244,7 +259,7 @@ class PluginInstallController extends Controller
                     Artisan::call('migrate', ['--path' => $relativePath, '--force' => true]);
                 } catch (\Throwable $e) {
                     report($e);
-                    return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Plugin instalado, mas as migrations falharam: '.$e->getMessage());
+                    return $this->pluginsIndexRedirect(['error' => 'Plugin instalado, mas as migrations falharam: '.$e->getMessage()]);
                 }
             }
         }
@@ -259,7 +274,7 @@ class PluginInstallController extends Controller
         $zip = new \ZipArchive;
         if ($zip->open($tempFile) !== true) {
             @unlink($tempFile);
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Arquivo do plugin inválido.');
+            return $this->pluginsIndexRedirect(['error' => 'Arquivo do plugin inválido.']);
         }
 
         $entries = [];
@@ -268,19 +283,19 @@ class PluginInstallController extends Controller
             if (str_contains($name, '..')) {
                 $zip->close();
                 @unlink($tempFile);
-                return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Arquivo do plugin inválido.');
+                return $this->pluginsIndexRedirect(['error' => 'Arquivo do plugin inválido.']);
             }
             $entries[] = $name;
         }
 
-        $extractTo = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'plugin_extract_' . $slug . '_' . Str::random(8);
+        $extractTo = $this->writableTempDirectory() . DIRECTORY_SEPARATOR . 'plugin_extract_' . $slug . '_' . Str::random(8);
         if (is_dir($extractTo)) {
             File::deleteDirectory($extractTo);
         }
         if (! File::makeDirectory($extractTo, 0755, true)) {
             $zip->close();
             @unlink($tempFile);
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Erro ao preparar extração.');
+            return $this->pluginsIndexRedirect(['error' => 'Erro ao preparar extração.']);
         }
 
         $zip->extractTo($extractTo);
@@ -313,17 +328,105 @@ class PluginInstallController extends Controller
         if (! is_dir($pluginsDir)) {
             File::makeDirectory($pluginsDir, 0755, true);
         }
-        rename($sourceDir, $targetDir);
-        File::deleteDirectory($extractTo);
+
+        if (! $this->moveExtractedPluginToTarget($sourceDir, $targetDir)) {
+            File::deleteDirectory($extractTo);
+            if (is_dir($targetDir)) {
+                File::deleteDirectory($targetDir);
+            }
+
+            return $this->pluginsIndexRedirect(['error' => 'Não foi possível mover o plugin para a pasta de destino (disco ou permissões).']);
+        }
+
+        if (is_dir($extractTo)) {
+            File::deleteDirectory($extractTo);
+        }
 
         $targetReal = realpath($targetDir);
         if (! $targetReal || ! Str::startsWith($targetReal, $realPluginsPath)) {
             if (is_dir($targetDir)) {
                 File::deleteDirectory($targetDir);
             }
-            return redirect()->route('plugins.index', ['tab' => 'store'])->with('error', 'Erro de segurança ao instalar o plugin.');
+
+            return $this->pluginsIndexRedirect(['error' => 'Erro de segurança ao instalar o plugin.']);
         }
 
         return null;
+    }
+
+    /**
+     * Diretório gravável para ZIP temporário e extração (sys temp, storage/app/tmp ou storage/framework/tmp).
+     */
+    private function writableTempDirectory(): string
+    {
+        $candidates = [
+            rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR),
+            storage_path('app'.DIRECTORY_SEPARATOR.'tmp'),
+            storage_path('framework'.DIRECTORY_SEPARATOR.'tmp'),
+        ];
+
+        foreach ($candidates as $dir) {
+            if ($dir === '' || $dir === false) {
+                continue;
+            }
+            try {
+                if (! is_dir($dir)) {
+                    File::makeDirectory($dir, 0755, true);
+                }
+                if (is_dir($dir) && is_writable($dir)) {
+                    return $dir;
+                }
+            } catch (\Throwable) {
+                continue;
+            }
+        }
+
+        return rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR);
+    }
+
+    /**
+     * Grava o upload em storage/app/tmp-plugins (sempre no mesmo volume que o projeto — evita falhas de move_uploaded_file entre discos).
+     */
+    private function persistUploadedZipToLocalTemp(\Illuminate\Http\UploadedFile $upload): ?string
+    {
+        try {
+            Storage::disk('local')->makeDirectory('tmp-plugins');
+        } catch (\Throwable) {
+            // ignore
+        }
+
+        try {
+            $relative = Storage::disk('local')->putFile('tmp-plugins', $upload);
+            if ($relative === false || $relative === null) {
+                return null;
+            }
+
+            return Storage::disk('local')->path($relative);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * rename() falha entre volumes (Docker, Windows, /tmp vs projeto). Usa cópia + remoção como fallback.
+     */
+    private function moveExtractedPluginToTarget(string $sourceDir, string $targetDir): bool
+    {
+        if (! is_dir($sourceDir)) {
+            return false;
+        }
+
+        if (@rename($sourceDir, $targetDir)) {
+            return true;
+        }
+
+        try {
+            File::copyDirectory($sourceDir, $targetDir);
+            File::deleteDirectory($sourceDir);
+
+            return is_dir($targetDir);
+        } catch (\Throwable) {
+            return false;
+        }
     }
 }

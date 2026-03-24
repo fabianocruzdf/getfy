@@ -64,6 +64,7 @@ class PluginServiceProvider extends ServiceProvider
                 'routes' => $manifest['routes'] ?? null,
                 'events' => $manifest['events'] ?? [],
                 'migrations' => $manifest['migrations'] ?? null,
+                'settings_tab' => $manifest['settings_tab'] ?? null,
             ];
         }
         return $result;

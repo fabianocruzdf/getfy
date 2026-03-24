@@ -67,9 +67,42 @@ class PluginRegistry
                 'migrations' => $manifest['migrations'] ?? null,
                 'description' => $manifest['description'] ?? null,
                 'author' => $manifest['author'] ?? null,
+                'settings_tab' => $manifest['settings_tab'] ?? null,
             ];
         }
         return $result;
+    }
+
+    /**
+     * Abas extra em Configurações declaradas no plugin.json (plugins ativos).
+     *
+     * @return array<int, array{id: string, label: string, component: string}>
+     */
+    public static function getSettingsTabs(): array
+    {
+        $items = [];
+        foreach (self::enabled() as $plugin) {
+            $tab = $plugin['settings_tab'] ?? null;
+            if (! is_array($tab)) {
+                continue;
+            }
+            $id = trim((string) ($tab['id'] ?? ''));
+            $label = trim((string) ($tab['label'] ?? ''));
+            $component = trim((string) ($tab['component'] ?? ''));
+            if ($id === '' || $label === '' || $component === '') {
+                continue;
+            }
+            if (! str_starts_with($component, 'Plugin/')) {
+                continue;
+            }
+            $items[] = [
+                'id' => $id,
+                'label' => $label,
+                'component' => $component,
+            ];
+        }
+
+        return $items;
     }
 
     /**

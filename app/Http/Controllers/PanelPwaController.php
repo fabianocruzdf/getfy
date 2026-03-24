@@ -24,33 +24,42 @@ class PanelPwaController extends Controller
         }
 
         $appName = config('getfy.app_name', 'Getfy');
-        $themeColor = config('getfy.theme_primary', '#0ea5e9');
+        $themeColor = config('getfy.pwa_theme_color');
+        $themeColor = ($themeColor !== null && $themeColor !== '') ? (string) $themeColor : (string) config('getfy.theme_primary', '#0ea5e9');
 
         $icons = [];
         $addIconVariants = function (string $src, string $sizes) use (&$icons): void {
             $icons[] = ['src' => $src, 'sizes' => $sizes, 'type' => 'image/png', 'purpose' => 'any'];
             $icons[] = ['src' => $src, 'sizes' => $sizes, 'type' => 'image/png', 'purpose' => 'maskable'];
         };
-        $iconsDir = public_path('icons');
-        $has192 = is_file($iconsDir.'/icon-192x192.png');
-        $has512 = is_file($iconsDir.'/icon-512x512.png');
-        $icon192Url = url('/icons/icon-192x192.png');
-        $icon512Url = url('/icons/icon-512x512.png');
 
-        if ($has192) {
-            $addIconVariants($icon192Url, '192x192');
-        }
-        if ($has512) {
-            $addIconVariants($icon512Url, '512x512');
-        }
-        if (empty($icons)) {
-            $fallbackIcon = (string) config('getfy.app_logo_icon', 'https://cdn.getfy.cloud/collapsed-logo.png');
-            $addIconVariants($fallbackIcon, '192x192');
-            $addIconVariants($fallbackIcon, '512x512');
-        } elseif ($has512 && ! $has192) {
-            $addIconVariants($icon512Url, '192x192');
-        } elseif ($has192 && ! $has512) {
-            $addIconVariants($icon192Url, '512x512');
+        $pwa192 = config('getfy.pwa_icon_192');
+        $pwa512 = config('getfy.pwa_icon_512');
+        if (is_string($pwa192) && $pwa192 !== '' && is_string($pwa512) && $pwa512 !== '') {
+            $addIconVariants($pwa192, '192x192');
+            $addIconVariants($pwa512, '512x512');
+        } else {
+            $iconsDir = public_path('icons');
+            $has192 = is_file($iconsDir.'/icon-192x192.png');
+            $has512 = is_file($iconsDir.'/icon-512x512.png');
+            $icon192Url = url('/icons/icon-192x192.png');
+            $icon512Url = url('/icons/icon-512x512.png');
+
+            if ($has192) {
+                $addIconVariants($icon192Url, '192x192');
+            }
+            if ($has512) {
+                $addIconVariants($icon512Url, '512x512');
+            }
+            if (empty($icons)) {
+                $fallbackIcon = (string) config('getfy.app_logo_icon', 'https://cdn.getfy.cloud/collapsed-logo.png');
+                $addIconVariants($fallbackIcon, '192x192');
+                $addIconVariants($fallbackIcon, '512x512');
+            } elseif ($has512 && ! $has192) {
+                $addIconVariants($icon512Url, '192x192');
+            } elseif ($has192 && ! $has512) {
+                $addIconVariants($icon192Url, '512x512');
+            }
         }
 
         $manifest = [

@@ -31,4 +31,11 @@ return [
     'app_logo_dark' => 'https://cdn.getfy.cloud/logo-dark.png',
     'app_logo_icon' => 'https://cdn.getfy.cloud/collapsed-logo.png',
     'app_logo_icon_dark' => 'https://cdn.getfy.cloud/collapsed-logo.png',
+
+    /** White Label plugin (null = default / não aplicado) */
+    'login_hero_image' => null,
+    'favicon_url' => null,
+    'pwa_theme_color' => null,
+    'pwa_icon_192' => null,
+    'pwa_icon_512' => null,
 ];

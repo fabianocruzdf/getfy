@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue';
 import { router, usePage } from '@inertiajs/vue3';
 import LayoutInfoprodutor from '@/Layouts/LayoutInfoprodutor.vue';
 import Button from '@/components/ui/Button.vue';
-import { Puzzle, Power, PowerOff, ExternalLink, CreditCard, Package, Download, ShoppingCart, Upload, X, Trash2, FolderUp, Check } from 'lucide-vue-next';
+import { Puzzle, Power, PowerOff, ExternalLink, CreditCard, Package, Download, Upload, Trash2, FolderUp } from 'lucide-vue-next';
 
 defineOptions({ layout: LayoutInfoprodutor });
 
@@ -143,7 +143,7 @@ function setStoreBannerFailed(slug) {
 
 const returnUrl = computed(() => {
     const base = typeof window !== 'undefined' ? window.location.origin : '';
-    return base + '/gerenciar-plugins?tab=store&install=';
+    return base + '/gerenciar-plugins?tab=installed&install=';
 });
 
 function checkoutUrl(slug) {
@@ -252,14 +252,8 @@ watch(() => page.url, () => {
     urlInstallSlug.value = q.get('install') || null;
 }, { immediate: true });
 
-watch(currentTab, (tab) => {
-    if (tab === 'store' && storePluginsList.value.length === 0 && !storePluginsLoading.value) {
-        loadStorePlugins();
-    }
-}, { immediate: true });
-
 watch([urlPurchaseToken, urlInstallSlug, currentTab], ([token, installSlug, tab]) => {
-    if (tab !== 'store' || !installSlug || !token) return;
+    if (tab !== 'installed' || !installSlug || !token) return;
     installStorePlugin(installSlug, token);
 }, { immediate: true });
 
@@ -345,9 +339,7 @@ function submitManualInstall() {
 </script>
 
 <template>
-    <div class="relative">
-        <!-- Conteúdo com blur e não clicável -->
-        <div class="space-y-6 pointer-events-none select-none blur-md">
+    <div class="space-y-6">
         <nav
             class="inline-flex flex-wrap gap-1 rounded-xl bg-zinc-100/80 p-1 dark:bg-zinc-800/80"
             aria-label="Abas de plugins"
@@ -372,11 +364,23 @@ function submitManualInstall() {
         <!-- Aba Instalados -->
         <template v-if="currentTab === 'installed'">
             <section>
-                <h2 class="mb-2 text-lg font-semibold text-zinc-900 dark:text-white">
-                    Plugins instalados
-                </h2>
+                <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+                    <h2 class="text-lg font-semibold text-zinc-900 dark:text-white">
+                        Plugins instalados
+                    </h2>
+                    <button
+                        type="button"
+                        class="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                        @click="openManualInstallModal"
+                    >
+                        <FolderUp class="h-4 w-4" />
+                        Instalar plugin (ZIP)
+                    </button>
+                </div>
                 <p class="mb-6 text-sm text-zinc-600 dark:text-zinc-400">
-                    Ative ou desative plugins. Plugins desativados não carregam rotas nem eventos.
+                    Ative ou desative plugins. Plugins desativados não carregam rotas nem eventos. Envie um ZIP com uma pasta raiz contendo
+                    <code class="rounded bg-zinc-200 px-1 dark:bg-zinc-700">plugin.json</code>
+                    para instalar manualmente.
                 </p>
                 <div
                     v-if="plugins.length === 0"
@@ -508,179 +512,31 @@ function submitManualInstall() {
             </section>
         </template>
 
-        <!-- Aba Loja de plugins -->
+        <!-- Aba Loja de plugins (catálogo em breve; use ZIP na aba Instalados) -->
         <template v-if="currentTab === 'store'">
-            <section>
-                <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
-                    <h2 class="text-lg font-semibold text-zinc-900 dark:text-white">
-                        Loja de plugins
-                    </h2>
-                    <div class="flex flex-wrap items-center gap-2">
-                        <button
-                            type="button"
-                            class="inline-flex items-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-700"
-                            @click="openManualInstallModal"
-                        >
-                            <FolderUp class="h-4 w-4" />
-                            Instalar plugin manualmente (ZIP)
-                        </button>
-                        <a
-                            v-if="pluginStore?.submit_url"
-                            :href="pluginStore.submit_url"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="inline-flex items-center gap-2 text-sm text-[var(--color-primary)] hover:underline"
-                        >
-                            <Upload class="h-4 w-4" />
-                            Subir meu plugin para loja
-                        </a>
-                    </div>
-                </div>
-                <p class="mb-6 text-sm text-zinc-600 dark:text-zinc-400">
-                    Instale plugins gratuitos ou compre e instale com um clique.
-                </p>
+            <section class="relative min-h-[280px] overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50/80 dark:border-zinc-700 dark:bg-zinc-900/40">
                 <div
-                    v-if="storePluginsLoading"
-                    class="rounded-xl border border-zinc-200 bg-zinc-50 p-8 text-center dark:border-zinc-700 dark:bg-zinc-800/50"
+                    class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center bg-white/85 px-6 text-center backdrop-blur-[2px] dark:bg-zinc-950/80"
                 >
-                    <span class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-zinc-300 border-t-[var(--color-primary)] dark:border-zinc-600" />
-                    <p class="mt-3 text-sm text-zinc-600 dark:text-zinc-400">Carregando loja...</p>
-                </div>
-                <div
-                    v-else-if="storePluginsError"
-                    class="rounded-xl border border-amber-200 bg-amber-50 p-6 text-center text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
-                >
-                    {{ storePluginsError }}
-                </div>
-                <div
-                    v-else-if="storePluginsList.length === 0"
-                    class="rounded-xl border border-zinc-200 bg-zinc-50 p-6 text-center text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-400"
-                >
-                    Nenhum plugin disponível na loja no momento.
-                </div>
-                <div
-                    v-else
-                    class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
-                >
-                    <button
-                        v-for="p in storePluginsList"
-                        :key="p.slug"
-                        type="button"
-                        class="flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white text-left shadow-sm transition-all duration-200 hover:border-zinc-300 hover:shadow-md dark:border-zinc-700 dark:bg-zinc-800 dark:hover:border-zinc-600"
-                        @click="openStoreDetail(p)"
+                    <Package class="mb-4 h-14 w-14 text-zinc-400 dark:text-zinc-500" aria-hidden="true" />
+                    <p class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">Em breve</p>
+                    <p class="mt-2 max-w-md text-sm text-zinc-600 dark:text-zinc-400">
+                        A loja de plugins estará disponível em breve. Enquanto isso, use a aba
+                        <strong class="font-medium text-zinc-800 dark:text-zinc-200">Instalados</strong>
+                        e o botão <strong class="font-medium text-zinc-800 dark:text-zinc-200">Instalar plugin (ZIP)</strong>.
+                    </p>
+                    <a
+                        v-if="pluginStore?.submit_url"
+                        :href="pluginStore.submit_url"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="pointer-events-auto mt-6 inline-flex items-center gap-2 text-sm text-[var(--color-primary)] hover:underline"
                     >
-                        <div class="relative aspect-[2/1] w-full shrink-0 overflow-hidden rounded-t-2xl border-b border-zinc-200 bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800/80">
-                            <Package v-show="!p.banner_url || storeBannerFailed[p.slug]" class="absolute inset-0 m-auto h-14 w-14 text-zinc-400 dark:text-zinc-500" />
-                            <img
-                                v-if="p.banner_url && !storeBannerFailed[p.slug]"
-                                :src="p.banner_url"
-                                :alt="p.name"
-                                class="absolute inset-0 h-full w-full object-cover object-center"
-                                @error="setStoreBannerFailed(p.slug)"
-                            />
-                        </div>
-                        <div class="flex flex-1 flex-col gap-2 p-4">
-                            <div class="flex items-start justify-between gap-2">
-                                <span class="font-semibold text-zinc-900 dark:text-white">{{ p.name }}</span>
-                                <span
-                                    v-if="isStorePluginInstalled(p)"
-                                    class="shrink-0 inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
-                                >
-                                    <Check class="h-3.5 w-3.5" />
-                                    Instalado
-                                </span>
-                            </div>
-                            <p class="line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">{{ p.short_description || '' }}</p>
-                            <div class="mt-auto flex items-center justify-between">
-                                <span class="rounded-md px-2 py-0.5 text-xs font-medium bg-zinc-100 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300">
-                                    {{ categoryLabel(p.category) }}
-                                </span>
-                                <span class="text-sm font-medium text-zinc-900 dark:text-white">
-                                    {{ p.price == 0 ? 'Grátis' : 'R$ ' + p.price }}
-                                </span>
-                            </div>
-                        </div>
-                    </button>
+                        <Upload class="h-4 w-4" />
+                        Subir meu plugin para loja
+                    </a>
                 </div>
             </section>
-
-            <!-- Modal detalhe plugin loja -->
-            <Teleport to="body">
-                <div
-                    v-if="storeDetail"
-                    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-                    @click.self="closeStoreDetail"
-                >
-                    <div
-                        class="max-h-[90vh] w-full max-w-lg overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-800"
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="store-detail-title"
-                    >
-                        <div class="flex items-center justify-between border-b border-zinc-200 p-4 dark:border-zinc-700">
-                            <h3 id="store-detail-title" class="text-lg font-semibold text-zinc-900 dark:text-white">
-                                {{ storeDetail.name }}
-                            </h3>
-                            <button
-                                type="button"
-                                class="rounded-lg p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-700 dark:hover:text-zinc-300"
-                                aria-label="Fechar"
-                                @click="closeStoreDetail"
-                            >
-                                <X class="h-5 w-5" />
-                            </button>
-                        </div>
-                        <div class="max-h-[60vh] overflow-y-auto p-4 space-y-4">
-                            <div v-if="storeDetail.banner_url && !storeBannerFailed[storeDetail.slug]" class="aspect-[2/1] w-full overflow-hidden rounded-xl bg-zinc-100 dark:bg-zinc-700">
-                                <img :src="storeDetail.banner_url" :alt="storeDetail.name" class="h-full w-full object-cover" />
-                            </div>
-                            <p v-if="storeDetail.description" class="text-sm text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">{{ storeDetail.description }}</p>
-                            <p v-else class="text-sm text-zinc-600 dark:text-zinc-400">{{ storeDetail.short_description || '' }}</p>
-                            <div class="flex flex-wrap gap-2 items-center">
-                                <span
-                                    v-if="isStorePluginInstalled(storeDetail)"
-                                    class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
-                                >
-                                    <Check class="h-3.5 w-3.5" />
-                                    Instalado
-                                </span>
-                                <span class="rounded-md px-2 py-0.5 text-xs font-medium bg-zinc-100 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300">{{ categoryLabel(storeDetail.category) }}</span>
-                                <span class="text-sm font-medium">{{ storeDetail.price == 0 ? 'Grátis' : 'R$ ' + storeDetail.price }}</span>
-                            </div>
-                            <p v-if="storeDetail.developer_name" class="text-sm text-zinc-600 dark:text-zinc-400">
-                                Por
-                                <a v-if="storeDetail.developer_url" :href="storeDetail.developer_url" target="_blank" rel="noopener noreferrer" class="text-[var(--color-primary)] hover:underline">{{ storeDetail.developer_name }}</a>
-                                <span v-else>{{ storeDetail.developer_name }}</span>
-                            </p>
-                        </div>
-                        <div class="flex flex-wrap gap-2 border-t border-zinc-200 p-4 dark:border-zinc-700">
-                            <template v-if="storeDetail.price == 0">
-                                <Button
-                                    size="sm"
-                                    :disabled="installingSlug === storeDetail.slug"
-                                    @click="installStorePlugin(storeDetail.slug)"
-                                >
-                                    <Download v-if="installingSlug !== storeDetail.slug" class="mr-1 h-4 w-4" />
-                                    <span v-else class="mr-1">...</span>
-                                    {{ installingSlug === storeDetail.slug ? 'Instalando...' : 'Instalar' }}
-                                </Button>
-                            </template>
-                            <template v-else>
-                                <a
-                                    :href="checkoutUrl(storeDetail.slug)"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    class="inline-flex items-center gap-1 rounded-lg bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
-                                >
-                                    <ShoppingCart class="h-4 w-4" />
-                                    Comprar
-                                </a>
-                            </template>
-                            <Button variant="outline" size="sm" @click="closeStoreDetail">Fechar</Button>
-                        </div>
-                    </div>
-                </div>
-            </Teleport>
         </template>
 
         <!-- Modal: extensão Zip não disponível (fallback) -->
@@ -793,15 +649,5 @@ function submitManualInstall() {
                 </div>
             </div>
         </Teleport>
-
-        </div>
-        <!-- Overlay "Em breve" — bloqueia interação -->
-        <div
-            class="absolute inset-0 z-10 flex items-center justify-center bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm"
-        >
-            <span class="text-2xl font-semibold text-zinc-700 dark:text-zinc-200">
-                Em breve..
-            </span>
-        </div>
     </div>
 </template>

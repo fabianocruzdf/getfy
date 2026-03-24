@@ -53,6 +53,8 @@ class HandleInertiaRequests extends Middleware
             'app_logo_icon_dark' => config('getfy.app_logo_icon_dark'),
         ] : null;
 
+        $publicBranding = $this->buildPublicBranding();
+
         $pageTitle = $this->pageTitleForRoute($request->route()?->getName());
 
         $pluginNavItems = [];
@@ -60,7 +62,9 @@ class HandleInertiaRequests extends Middleware
         $achievementsProgress = null;
         $pushEnabled = false;
         $vapidPublic = null;
+        $settingsPluginTabs = [];
         if ($user && $user->canAccessPanel()) {
+            $settingsPluginTabs = PluginRegistry::getSettingsTabs();
             $pluginNavItems = PluginRegistry::getMenuItems();
             $vapidPublic = config('getfy.pwa.vapid_public');
             $pushEnabled = ! empty($vapidPublic) && ! empty(config('getfy.pwa.vapid_private'));
@@ -126,6 +130,8 @@ class HandleInertiaRequests extends Middleware
             'cloud_mode' => (bool) config('getfy.cloud_mode', false),
             'cloud_billing_renew_window_days' => (int) config('getfy.cloud.billing_renew_window_days', 7),
             'appSettings' => $appSettings,
+            'public_branding' => $publicBranding,
+            'settings_plugin_tabs' => $settingsPluginTabs,
             'pluginNavItems' => $pluginNavItems,
             'plugins' => $plugins,
             'achievementsProgress' => $achievementsProgress,
@@ -173,5 +179,33 @@ class HandleInertiaRequests extends Middleware
         ];
 
         return $name ? ($titles[$name] ?? null) : null;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildPublicBranding(): array
+    {
+        $themePrimary = (string) config('getfy.theme_primary', '#00cc00');
+        $pwaTheme = config('getfy.pwa_theme_color');
+        $pwaTheme = ($pwaTheme !== null && $pwaTheme !== '') ? (string) $pwaTheme : $themePrimary;
+        $favicon = config('getfy.favicon_url');
+        $favicon = ($favicon !== null && $favicon !== '') ? (string) $favicon : 'https://cdn.getfy.cloud/collapsed-logo.png';
+        $loginHero = config('getfy.login_hero_image');
+        $loginHero = ($loginHero !== null && $loginHero !== '') ? (string) $loginHero : 'https://cdn.getfy.cloud/login.webp';
+
+        return [
+            'app_name' => (string) config('getfy.app_name', 'Getfy'),
+            'theme_primary' => $themePrimary,
+            'pwa_theme_color' => $pwaTheme,
+            'app_logo' => (string) config('getfy.app_logo'),
+            'app_logo_dark' => (string) config('getfy.app_logo_dark'),
+            'app_logo_icon' => (string) config('getfy.app_logo_icon'),
+            'app_logo_icon_dark' => (string) config('getfy.app_logo_icon_dark'),
+            'login_hero_image' => $loginHero,
+            'favicon_url' => $favicon,
+            'pwa_icon_192' => config('getfy.pwa_icon_192'),
+            'pwa_icon_512' => config('getfy.pwa_icon_512'),
+        ];
     }
 }

@@ -1,9 +1,21 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, defineAsyncComponent } from 'vue';
 import { useForm } from '@inertiajs/vue3';
 import LayoutInfoprodutor from '@/Layouts/LayoutInfoprodutor.vue';
 import Button from '@/components/ui/Button.vue';
-import { Mail, Languages, Banknote, HardDrive, Clock, AlertCircle, Trash2, RefreshCw, Upload, Download } from 'lucide-vue-next';
+import {
+    Mail,
+    Languages,
+    Banknote,
+    HardDrive,
+    Clock,
+    AlertCircle,
+    Trash2,
+    RefreshCw,
+    Upload,
+    Download,
+    Palette,
+} from 'lucide-vue-next';
 import IntegrationCard from '@/components/IntegrationCard.vue';
 import EmailProviderSidebar from '@/components/EmailProviderSidebar.vue';
 
@@ -46,15 +58,52 @@ const props = defineProps({
         type: String,
         default: null,
     },
+    settings_plugin_tabs: {
+        type: Array,
+        default: () => [],
+    },
 });
 
-const allowedTabs = ['email', 'storage', 'traducoes', 'moedas', 'cron', 'update'];
+function allAllowedTabIds() {
+    const core = ['email', 'storage', 'traducoes', 'moedas', 'cron', 'update'];
+    const extra = (props.settings_plugin_tabs || []).map((t) => t.id).filter(Boolean);
+    return [...core, ...extra];
+}
+
 const activeTab = ref('email');
 if (typeof window !== 'undefined') {
     const t = new URLSearchParams(window.location.search).get('tab');
-    if (allowedTabs.includes(t)) activeTab.value = t;
+    if (t && allAllowedTabIds().includes(t)) activeTab.value = t;
     const isMobile = window.matchMedia && window.matchMedia('(max-width: 639px)').matches;
     if (isMobile && activeTab.value === 'traducoes') activeTab.value = 'email';
+}
+
+const pluginTabIds = computed(() => (props.settings_plugin_tabs || []).map((t) => t.id).filter(Boolean));
+
+function isPluginTab(tabId) {
+    return pluginTabIds.value.includes(tabId);
+}
+
+const pluginPagesGlob = import.meta.glob('../../PluginPages/**/*.vue');
+const pluginTabComponentCache = new Map();
+
+function getPluginTabComponent(componentName) {
+    if (!componentName || typeof componentName !== 'string') {
+        return null;
+    }
+    if (pluginTabComponentCache.has(componentName)) {
+        return pluginTabComponentCache.get(componentName);
+    }
+    const rel = componentName.startsWith('Plugin/') ? componentName.slice(7) : componentName;
+    const path = `../../PluginPages/${rel}.vue`;
+    const loader = pluginPagesGlob[path];
+    if (!loader) {
+        pluginTabComponentCache.set(componentName, null);
+        return null;
+    }
+    const asyncComp = defineAsyncComponent(loader);
+    pluginTabComponentCache.set(componentName, asyncComp);
+    return asyncComp;
 }
 
 const defaultTranslations = () => ({
@@ -106,7 +155,7 @@ const sendResult = vueRef({ status: null, message: '' });
 const connectionTesting = vueRef(false);
 const sendTestSending = vueRef(false);
 
-const tabs = [
+const coreTabsStatic = [
     { id: 'email', label: 'E‑MAIL', icon: Mail },
     { id: 'storage', label: 'Storage', icon: HardDrive },
     { id: 'traducoes', label: 'Traduções', icon: Languages },
@@ -114,6 +163,15 @@ const tabs = [
     { id: 'cron', label: 'Cron', icon: Clock },
     { id: 'update', label: 'Update', icon: Download },
 ];
+
+const tabs = computed(() => {
+    const plug = (props.settings_plugin_tabs || []).map((t) => ({
+        id: t.id,
+        label: t.label,
+        icon: Palette,
+    }));
+    return [...coreTabsStatic, ...plug];
+});
 
 const updateCheckLoading = ref(false);
 const updateCheckResult = ref(null);
@@ -633,7 +691,11 @@ const selectClass =
             </nav>
         </div>
 
-        <form v-show="activeTab !== 'update' && activeTab !== 'cron'" class="w-full max-w-full space-y-6" @submit.prevent="form.put('/configuracoes')">
+        <form
+            v-show="activeTab !== 'update' && activeTab !== 'cron' && !isPluginTab(activeTab)"
+            class="w-full max-w-full space-y-6"
+            @submit.prevent="form.put('/configuracoes')"
+        >
             <!-- Aba E-MAIL -->
             <Transition
                 enter-active-class="transition duration-200 ease-out"
@@ -1078,6 +1140,15 @@ const selectClass =
                 <Button type="submit" :disabled="form.processing">Salvar alterações</Button>
             </div>
         </form>
+
+        <template v-for="pt in settings_plugin_tabs" :key="pt.id">
+            <div v-show="activeTab === pt.id" class="w-full max-w-full space-y-6">
+                <component :is="getPluginTabComponent(pt.component)" v-if="getPluginTabComponent(pt.component)" />
+                <p v-else class="text-sm text-red-600 dark:text-red-400">
+                    Componente do plugin não encontrado: {{ pt.component }}
+                </p>
+            </div>
+        </template>
 
         <Transition
             enter-active-class="transition duration-200 ease-out"
