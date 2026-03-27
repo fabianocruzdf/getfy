@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.6] - 27-03-2026
+
+### Correções
+
+- Admin: produtos e vendas antigos voltaram a aparecer corretamente no painel após a correção de tenant.
+
 ## [1.0.5] - 27-03-2026
 
 ### Correções

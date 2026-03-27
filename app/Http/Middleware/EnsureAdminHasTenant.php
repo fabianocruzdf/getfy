@@ -31,6 +31,29 @@ class EnsureAdminHasTenant
                     DB::table('gateway_credentials')->whereNull('tenant_id')->update(['tenant_id' => $tenantId]);
                     DB::table('coupons')->whereNull('tenant_id')->update(['tenant_id' => $tenantId]);
                     DB::table('api_applications')->whereNull('tenant_id')->update(['tenant_id' => $tenantId]);
+
+                    // Vendas antigas do admin: pedidos e sessões criados quando tenant_id ainda era null.
+                    // Atualizamos apenas pedidos cujos produtos já pertencem ao tenant do admin.
+                    DB::table('orders')
+                        ->whereNull('orders.tenant_id')
+                        ->whereIn('orders.product_id', function ($q) use ($tenantId) {
+                            $q->select('id')->from('products')->where('tenant_id', $tenantId);
+                        })
+                        ->update(['tenant_id' => $tenantId]);
+
+                    DB::table('checkout_sessions')
+                        ->whereNull('tenant_id')
+                        ->whereIn('product_id', function ($q) use ($tenantId) {
+                            $q->select('id')->from('products')->where('tenant_id', $tenantId);
+                        })
+                        ->update(['tenant_id' => $tenantId]);
+
+                    DB::table('subscriptions')
+                        ->whereNull('tenant_id')
+                        ->whereIn('product_id', function ($q) use ($tenantId) {
+                            $q->select('id')->from('products')->where('tenant_id', $tenantId);
+                        })
+                        ->update(['tenant_id' => $tenantId]);
                 });
 
                 Cache::put($cacheKey, true, now()->addDays(365));
