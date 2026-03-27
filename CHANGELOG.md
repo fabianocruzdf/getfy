@@ -5,6 +5,9 @@
 ### Correções
 
 - Admin: produtos e vendas antigos voltaram a aparecer corretamente no painel após a correção de tenant.
+- Vendas: pedidos com **order bump** agora são contabilizados corretamente no total e exibem os itens comprados.
+- Vendas: o detalhe da venda voltou a mostrar os dados de **UTM** da compra (utm_source, utm_medium, utm_campaign).
+- Integração **Utmify**: envios voltaram a funcionar mesmo em ambientes sem worker/fila ativa.
 
 ## [1.0.5] - 27-03-2026
 

@@ -11,6 +11,7 @@ use App\Events\PixGenerated;
 use App\Jobs\UtmifySendOrderJob;
 use App\Models\UtmifyIntegration;
 use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Support\Str;
 
 class UtmifyEventSubscriber
 {
@@ -83,13 +84,37 @@ class UtmifyEventSubscriber
                 continue;
             }
 
-            UtmifySendOrderJob::dispatch(
-                $integration->id,
-                $order->id,
-                $utmifyStatus,
-                $approvedAt,
-                $refundedAt
-            );
+            if ($this->shouldDispatchSync()) {
+                UtmifySendOrderJob::dispatchSync(
+                    $integration->id,
+                    $order->id,
+                    $utmifyStatus,
+                    $approvedAt,
+                    $refundedAt
+                );
+            } else {
+                UtmifySendOrderJob::dispatch(
+                    $integration->id,
+                    $order->id,
+                    $utmifyStatus,
+                    $approvedAt,
+                    $refundedAt
+                );
+            }
         }
+    }
+
+    private function shouldDispatchSync(): bool
+    {
+        if (config('queue.default') === 'sync') {
+            return true;
+        }
+
+        $v = (string) env('INTEGRATIONS_DISPATCH_SYNC', '');
+        if ($v !== '' && in_array(Str::lower(trim($v)), ['1', 'true', 'yes', 'on'], true)) {
+            return true;
+        }
+
+        return false;
     }
 }

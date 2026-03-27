@@ -41,6 +41,16 @@ function statusLabel(status) {
     };
     return map[status] ?? status ?? '–';
 }
+
+function itemLabel(item) {
+    const isBump = Number(item?.position ?? 0) > 0;
+    const baseName =
+        item?.product?.name ??
+        item?.product_offer?.name ??
+        item?.subscription_plan?.name ??
+        'Item';
+    return isBump ? `${baseName} (Bump)` : baseName;
+}
 </script>
 
 <template>
@@ -125,7 +135,7 @@ function statusLabel(status) {
                             </div>
                             <div class="space-y-1">
                                 <p class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Valor líquido</p>
-                                <p class="text-sm text-zinc-900 dark:text-white">{{ formatBRL(venda.amount) }}</p>
+                                <p class="text-sm text-zinc-900 dark:text-white">{{ formatBRL(venda.amount_total ?? venda.amount) }}</p>
                             </div>
                             <div class="space-y-1">
                                 <p class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Produto</p>
@@ -143,6 +153,23 @@ function statusLabel(status) {
                                 <p class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Recorrência</p>
                                 <p class="text-sm text-zinc-900 dark:text-white">{{ venda.subscription_plan_id ? 'Assinatura' : '–' }}</p>
                             </div>
+                            <div class="space-y-2" v-if="(venda.order_items ?? []).length">
+                                <p class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Itens da compra</p>
+                                <div class="divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
+                                    <div
+                                        v-for="(item, idx) in (venda.order_items ?? [])"
+                                        :key="idx"
+                                        class="flex items-center justify-between gap-3 px-4 py-3"
+                                    >
+                                        <p class="text-sm text-zinc-900 dark:text-white">
+                                            {{ itemLabel(item) }}
+                                        </p>
+                                        <p class="text-sm font-medium text-zinc-900 dark:text-white">
+                                            {{ formatBRL(item.amount) }}
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
                             <div class="space-y-1">
                                 <p class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">URL do Checkout</p>
                                 <a
@@ -159,27 +186,21 @@ function statusLabel(status) {
                             </div>
                             <div class="space-y-1">
                                 <p class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">utm_source</p>
-                                <p class="text-sm text-zinc-500">Não informado</p>
+                                <p class="text-sm" :class="venda.checkout_session?.utm_source ? 'text-zinc-900 dark:text-white' : 'text-zinc-500'">
+                                    {{ venda.checkout_session?.utm_source ?? 'Não informado' }}
+                                </p>
                             </div>
                             <div class="space-y-1">
                                 <p class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">utm_campaign</p>
-                                <p class="text-sm text-zinc-500">Não informado</p>
+                                <p class="text-sm" :class="venda.checkout_session?.utm_campaign ? 'text-zinc-900 dark:text-white' : 'text-zinc-500'">
+                                    {{ venda.checkout_session?.utm_campaign ?? 'Não informado' }}
+                                </p>
                             </div>
                             <div class="space-y-1">
                                 <p class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">utm_medium</p>
-                                <p class="text-sm text-zinc-500">Não informado</p>
-                            </div>
-                            <div class="space-y-1">
-                                <p class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">utm_content</p>
-                                <p class="text-sm text-zinc-500">Não informado</p>
-                            </div>
-                            <div class="space-y-1">
-                                <p class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">utm_term</p>
-                                <p class="text-sm text-zinc-500">Não informado</p>
-                            </div>
-                            <div class="space-y-1">
-                                <p class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">sck</p>
-                                <p class="text-sm text-zinc-500">Não informado</p>
+                                <p class="text-sm" :class="venda.checkout_session?.utm_medium ? 'text-zinc-900 dark:text-white' : 'text-zinc-500'">
+                                    {{ venda.checkout_session?.utm_medium ?? 'Não informado' }}
+                                </p>
                             </div>
                             <div class="space-y-1">
                                 <p class="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Data de criação</p>

@@ -6,6 +6,7 @@ use App\Events\OrderCompleted;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\ProductOffer;
+use App\Models\OrderItem;
 use App\Models\Subscription;
 use App\Services\AccessEmailService;
 use Illuminate\Http\JsonResponse;
@@ -214,7 +215,17 @@ class VendasController extends Controller
         [$filteredQuery, $statusFilter] = $this->buildFilteredQuery($request, $tenantId);
 
         $vendas = $filteredQuery
-            ->with(['product:id,name,slug,checkout_slug', 'user:id,name,email', 'productOffer:id,name,checkout_slug', 'subscriptionPlan:id,name,checkout_slug'])
+            ->with([
+                'product:id,name,slug,checkout_slug',
+                'user:id,name,email',
+                'productOffer:id,name,checkout_slug',
+                'subscriptionPlan:id,name,checkout_slug',
+                'orderItems:id,order_id,product_id,product_offer_id,subscription_plan_id,amount,position',
+                'orderItems.product:id,name',
+                'orderItems.productOffer:id,name',
+                'orderItems.subscriptionPlan:id,name',
+                'checkoutSession:id,order_id,utm_source,utm_medium,utm_campaign',
+            ])
             ->orderByDesc('created_at')
             ->paginate(20)
             ->withQueryString()
@@ -224,6 +235,12 @@ class VendasController extends Controller
                 $arr['product_display_name'] = $this->productDisplayName($o);
                 $arr['checkout_url'] = url('/c/'.$o->getCheckoutSlug());
                 $arr['payment_type_label'] = $this->paymentTypeLabel($o);
+                $itemsTotal = $o->relationLoaded('orderItems')
+                    ? (float) $o->orderItems->sum(fn ($it) => (float) ($it->amount ?? 0))
+                    : null;
+                $arr['amount_total'] = $itemsTotal !== null && $itemsTotal > 0
+                    ? round($itemsTotal, 2)
+                    : (float) $o->amount;
 
                 return $arr;
             });
@@ -232,8 +249,12 @@ class VendasController extends Controller
 
         $vendasEncontradas = (clone $statsQuery)->count();
 
-        $valorLiquido = (float) (clone $statsQuery)
+        $completedOrdersIds = (clone $statsQuery)
             ->where('status', 'completed')
+            ->select('orders.id');
+
+        $valorLiquido = (float) OrderItem::query()
+            ->whereIn('order_id', $completedOrdersIds)
             ->sum('amount');
 
         $vendasPix = (clone $statsQuery)
