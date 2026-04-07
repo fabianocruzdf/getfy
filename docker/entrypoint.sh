@@ -16,6 +16,34 @@ fi
 
 rm -f public/hot 2>/dev/null || true
 
+# Se existir VAPID compartilhado (volume .docker), injeta no .env local.
+# Importante: o worker "queue" pode não rodar pwa:vapid; ele precisa ler as mesmas chaves do "app".
+php -r '
+$sharedFile = ".docker/pwa_vapid.env";
+$envFile = ".env";
+if (!is_file($sharedFile) || !is_file($envFile)) { exit(0); }
+$shared = (string) file_get_contents($sharedFile);
+$env = (string) file_get_contents($envFile);
+$env = str_replace("\r\n", "\n", $env);
+$shared = str_replace("\r\n", "\n", $shared);
+foreach (["PWA_VAPID_PUBLIC","PWA_VAPID_PRIVATE"] as $k) {
+  if (!preg_match("/^\\s*".$k."\\s*=\\s*(.+)\\s*$/mi", $shared, $m)) { continue; }
+  $v = trim((string) ($m[1] ?? ""));
+  $v = trim($v, " \\t\\n\\r\\0\\x0B\\\"\\x27`");
+  if ($v === "") { continue; }
+  $needsQuotes = (bool) preg_match("/\\s|#|\"|\\x27|`/", $v);
+  $escaped = $needsQuotes ? ("\"" . str_replace("\"", "\\\"", $v) . "\"") : $v;
+  $line = $k . "=" . $escaped;
+  $pattern = "/^\\s*" . preg_quote($k, "/") . "\\s*=.*$/m";
+  if (preg_match($pattern, $env)) {
+    $env = (string) preg_replace($pattern, $line, $env);
+  } else {
+    $env = rtrim($env, "\r\n") . "\n" . $line . "\n";
+  }
+}
+file_put_contents($envFile, $env);
+';
+
 php -r '
 $envFile = ".env";
 $content = file_exists($envFile) ? (string) file_get_contents($envFile) : "";
@@ -123,5 +151,26 @@ if [ "${GETFY_RUN_SETUP:-true}" = "true" ]; then
     php artisan pwa:vapid || true
   fi
 fi
+
+# Persiste VAPID em arquivo compartilhado no volume .docker para que "queue" e "app" usem as mesmas chaves.
+php -r '
+$envFile = ".env";
+$sharedFile = ".docker/pwa_vapid.env";
+if (!is_file($envFile)) { exit(0); }
+$env = (string) file_get_contents($envFile);
+$env = str_replace("\r\n", "\n", $env);
+$out = "";
+foreach (["PWA_VAPID_PUBLIC","PWA_VAPID_PRIVATE"] as $k) {
+  if (!preg_match("/^\\s*".$k."\\s*=\\s*(.+)\\s*$/mi", $env, $m)) { continue; }
+  $v = trim((string) ($m[1] ?? ""));
+  $v = trim($v, " \\t\\n\\r\\0\\x0B\\\"\\x27`");
+  if ($v === "") { continue; }
+  $out .= $k . "=\"" . str_replace("\"", "\\\"", $v) . "\"\n";
+}
+if ($out !== "") {
+  @mkdir(dirname($sharedFile), 0777, true);
+  file_put_contents($sharedFile, $out);
+}
+';
 
 exec "$@"
