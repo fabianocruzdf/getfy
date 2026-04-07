@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\PanelNotification;
 use App\Models\PanelPushSubscription;
+use App\Support\VapidEnvKeys;
 use Minishlink\WebPush\Subscription;
 use Minishlink\WebPush\WebPush;
 use Illuminate\Support\Facades\Log;
@@ -68,6 +69,17 @@ class PanelPushService
 
         if (! $vapidPublic || ! $vapidPrivate) {
             Log::warning('PanelPushService: VAPID não configurado (defina PWA_VAPID_PUBLIC e PWA_VAPID_PRIVATE no .env)', ['tenant_id' => $tenantId]);
+            return 0;
+        }
+
+        if (! VapidEnvKeys::decodedLengthsValid($vapidPublic, $vapidPrivate)) {
+            Log::error('PanelPushService: chaves VAPID inválidas ou truncadas (decode não resulta em 65/32 bytes).', [
+                'tenant_id' => $tenantId,
+                'public_b64url_len' => strlen($vapidPublic),
+                'private_b64url_len' => strlen($vapidPrivate),
+                'hint' => 'Rode `php artisan pwa:vapid` no container app, reinicie app+queue, limpe `bootstrap/cache/config.php`, apague inscrições antigas em panel_push_subscriptions e reative notificações no PWA.',
+            ]);
+
             return 0;
         }
 
