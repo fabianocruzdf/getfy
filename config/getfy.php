@@ -1,5 +1,7 @@
 <?php
 
+use App\Support\VapidEnvKeys;
+
 $versionFile = base_path('VERSION');
 $version = trim((is_file($versionFile) ? file_get_contents($versionFile) : '') ?: '') ?: env('GETFY_VERSION', '1.0.0');
 
@@ -22,8 +24,8 @@ return [
     'updates_enabled' => env('GETFY_UPDATES_ENABLED', true),
     'php_path' => env('GETFY_PHP_PATH', null),
     'pwa' => [
-        'vapid_public' => env('PWA_VAPID_PUBLIC', null),
-        'vapid_private' => env('PWA_VAPID_PRIVATE', null),
+        'vapid_public' => VapidEnvKeys::normalize(env('PWA_VAPID_PUBLIC')),
+        'vapid_private' => VapidEnvKeys::normalize(env('PWA_VAPID_PRIVATE')),
     ],
     'app_name' => 'Getfy',
     'theme_primary' => '#00cc00',
