@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\AccessEmailService;
+use App\Services\TeamAccessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -19,6 +20,10 @@ class AlunosController extends Controller
 
     private function tenantProductIds(?int $tenantId): array
     {
+        if (auth()->user()?->isTeam()) {
+            return app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
+        }
+
         return Product::forTenant($tenantId)->pluck('id')->toArray();
     }
 

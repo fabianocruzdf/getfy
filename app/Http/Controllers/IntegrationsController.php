@@ -6,6 +6,7 @@ use App\Gateways\GatewayRegistry;
 use App\Models\GatewayCredential;
 use App\Models\Product;
 use App\Models\Setting;
+use App\Models\CademiIntegration;
 use App\Models\SpedyIntegration;
 use App\Models\UtmifyIntegration;
 use App\Models\Webhook;
@@ -83,6 +84,23 @@ class IntegrationsController extends Controller
             ->values()
             ->all();
 
+        $cademiIntegrations = CademiIntegration::forTenant($tenantId)
+            ->with('products:id,name')
+            ->orderBy('name')
+            ->get()
+            ->map(fn (CademiIntegration $i) => [
+                'id' => $i->id,
+                'name' => $i->name,
+                'base_url' => $i->base_url,
+                'is_active' => $i->is_active,
+                'configured' => $i->api_key !== null && $i->api_key !== '',
+                'api_key' => $i->api_key ?? '',
+                'product_ids' => $i->products->pluck('id')->values()->all(),
+                'products' => $i->products->map(fn ($p) => ['id' => $p->id, 'name' => $p->name])->values()->all(),
+            ])
+            ->values()
+            ->all();
+
         $products = Product::forTenant($tenantId)->orderBy('name')->get(['id', 'name']);
 
         return Inertia::render('Integrations/Index', [
@@ -92,6 +110,7 @@ class IntegrationsController extends Controller
             'webhook_events' => $webhookEvents,
             'utmify_integrations' => $utmifyIntegrations,
             'spedy_integrations' => $spedyIntegrations,
+            'cademi_integrations' => $cademiIntegrations,
             'products' => $products,
         ]);
     }

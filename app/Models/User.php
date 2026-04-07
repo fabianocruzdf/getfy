@@ -25,11 +25,13 @@ class User extends Authenticatable
         'password',
         'role',
         'tenant_id',
+        'team_role_id',
     ];
 
     public const ROLE_ADMIN = 'admin';
     public const ROLE_INFOPRODUTOR = 'infoprodutor';
     public const ROLE_ALUNO = 'aluno';
+    public const ROLE_TEAM = 'team';
 
     public function isAdmin(): bool
     {
@@ -46,9 +48,19 @@ class User extends Authenticatable
         return $this->role === self::ROLE_ALUNO;
     }
 
+    public function isTeam(): bool
+    {
+        return $this->role === self::ROLE_TEAM;
+    }
+
     public function canAccessPanel(): bool
     {
-        return $this->isAdmin() || $this->isInfoprodutor();
+        return $this->isAdmin() || $this->isInfoprodutor() || $this->isTeam();
+    }
+
+    public function teamRole(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(TeamRole::class, 'team_role_id');
     }
 
     public function products(): \Illuminate\Database\Eloquent\Relations\BelongsToMany

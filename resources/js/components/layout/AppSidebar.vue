@@ -50,15 +50,6 @@ const iconMap = {
     CodeXml,
 };
 
-const coreNavItems = [
-    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-    { name: 'Vendas', href: '/vendas', icon: CircleDollarSign },
-    { name: 'Produtos', href: '/produtos', icon: Package },
-    { name: 'Relatórios', href: '/relatorios', icon: BarChart3 },
-    { name: 'Integrações', href: '/integracoes', icon: Cable },
-    { name: 'E-mail Marketing', href: '/email-marketing', icon: Mail },
-];
-
 const pluginNavItems = computed(() => {
     const raw = page.props.pluginNavItems ?? [];
     return raw.map((item) => ({
@@ -69,16 +60,44 @@ const pluginNavItems = computed(() => {
 });
 
 const isAdmin = computed(() => page.props.auth?.user?.role === 'admin');
+const perms = computed(() => page.props.auth?.permissions ?? {});
+const canView = (key) => {
+    // Admin/infoprodutor têm acesso total via backend; no front apenas para ocultar itens do menu em users de equipe.
+    const role = page.props.auth?.user?.role;
+    if (role === 'admin' || role === 'infoprodutor') return true;
+    return !!perms.value?.[key];
+};
 
 const navItems = computed(() => {
-    const items = [...coreNavItems, ...pluginNavItems.value];
-    if (isAdmin.value) {
-        items.push({ name: 'Usuários', href: '/usuarios', icon: Users });
+    const items = [];
+
+    // Core items com permissões (usuário de equipe)
+    if (canView('dashboard.view')) items.push({ name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard });
+    if (canView('vendas.view')) items.push({ name: 'Vendas', href: '/vendas', icon: CircleDollarSign });
+    if (canView('produtos.view')) items.push({ name: 'Produtos', href: '/produtos', icon: Package });
+    if (canView('relatorios.view')) items.push({ name: 'Relatórios', href: '/relatorios', icon: BarChart3 });
+    if (canView('integracoes.view')) items.push({ name: 'Integrações', href: '/integracoes', icon: Cable });
+    if (canView('email_marketing.view')) items.push({ name: 'E-mail Marketing', href: '/email-marketing', icon: Mail });
+
+    // Plugins: apenas admin/infoprodutor (backend reforça)
+    if ((page.props.auth?.user?.role === 'admin' || page.props.auth?.user?.role === 'infoprodutor') && pluginNavItems.value.length) {
+        items.push(...pluginNavItems.value);
     }
-    items.push({ name: 'API Pagamentos', href: '/aplicacoes-api', icon: CodeXml });
+
+    // Usuários: admin vai para /usuarios (infoprodutores). Infoprodutor/equipe vai direto para a aba Equipe.
+    if (isAdmin.value) {
+        items.push({ name: 'Usuários / Equipe', href: '/usuarios', icon: Users });
+    } else if (page.props.auth?.user?.role === 'infoprodutor' || canView('equipe.manage')) {
+        items.push({ name: 'Equipe', href: '/usuarios/equipe', icon: Users });
+    }
+
+    if (canView('api_pagamentos.view')) items.push({ name: 'API Pagamentos', href: '/aplicacoes-api', icon: CodeXml });
     items.push({ separator: true });
-    items.push({ name: 'Configurações', href: '/configuracoes', icon: Settings });
-    items.push({ name: 'Plugins', href: '/gerenciar-plugins', icon: Plug });
+    if (canView('configuracoes.view')) items.push({ name: 'Configurações', href: '/configuracoes', icon: Settings });
+
+    if (page.props.auth?.user?.role === 'admin' || page.props.auth?.user?.role === 'infoprodutor') {
+        items.push({ name: 'Plugins', href: '/gerenciar-plugins', icon: Plug });
+    }
     return items;
 });
 

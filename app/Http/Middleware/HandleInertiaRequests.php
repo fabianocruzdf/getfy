@@ -8,6 +8,7 @@ use App\Models\PanelNotification;
 use App\Plugins\PluginRegistry;
 use App\Services\SalesAchievementsService;
 use App\Services\StorageService;
+use App\Services\TeamAccessService;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -117,6 +118,12 @@ class HandleInertiaRequests extends Middleware
                     'role' => $user->role,
                     'avatar_url' => $user->avatar ? app(StorageService::class)->url($user->avatar) : null,
                 ] : null,
+                'permissions' => ($user && $user->canAccessPanel())
+                    ? app(TeamAccessService::class)->permissionsFor($user)
+                    : [],
+                'allowed_product_ids' => ($user && $user->canAccessPanel())
+                    ? app(TeamAccessService::class)->allowedProductIdsFor($user)
+                    : [],
             ],
             'flash' => [
                 'success' => $request->session()->get('success'),

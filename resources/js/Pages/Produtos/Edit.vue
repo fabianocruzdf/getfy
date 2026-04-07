@@ -229,6 +229,7 @@ const props = defineProps({
     productTypes: { type: Array, default: () => [] },
     billingTypes: { type: Array, default: () => [] },
     exchange_rates: { type: Object, default: () => ({ brl_eur: 0.16, brl_usd: 0.18 }) },
+    cademi_integrations: { type: Array, default: () => [] },
     gateways_by_method: {
         type: Object,
         default: () => ({ pix: [], card: [], boleto: [], pix_auto: [], crypto: [] }),
@@ -338,6 +339,79 @@ const logoUploading = ref(false);
 const logoError = ref('');
 const logoInputRef = ref(null);
 const deliverableLinkSidebarOpen = ref(false);
+const cademiSaving = ref(false);
+const cademiError = ref('');
+const cademiTagsLoading = ref(false);
+const cademiTagsError = ref('');
+const cademiTags = ref([]);
+const cademiTagQuery = ref('');
+const cademiConfig = ref({
+    integration_id: props.produto?.external_member_area?.integration_id ?? '',
+    cademi_tag_id: props.produto?.external_member_area?.cademi_tag_id ?? '',
+    cademi_produto_ids: Array.isArray(props.produto?.external_member_area?.cademi_produto_ids)
+        ? props.produto.external_member_area.cademi_produto_ids.map((v) => String(v))
+        : props.produto?.external_member_area?.cademi_produto_id
+          ? [String(props.produto.external_member_area.cademi_produto_id)]
+          : [''],
+});
+
+const filteredCademiTags = computed(() => {
+    const q = (cademiTagQuery.value || '').trim().toLowerCase();
+    if (!q) return cademiTags.value;
+    return (cademiTags.value || []).filter((t) => String(t.nome || '').toLowerCase().includes(q));
+});
+
+async function loadCademiTags() {
+    cademiTagsError.value = '';
+    cademiTags.value = [];
+    const integrationId = cademiConfig.value.integration_id;
+    if (!integrationId) return;
+    cademiTagsLoading.value = true;
+    try {
+        const { data } = await axios.get(`/integracoes/cademi/${integrationId}/tags`);
+        cademiTags.value = Array.isArray(data?.tags) ? data.tags : [];
+    } catch (err) {
+        cademiTagsError.value = err.response?.data?.message || 'Não foi possível listar as TAGs da Cademí.';
+    } finally {
+        cademiTagsLoading.value = false;
+    }
+}
+
+watch(
+    () => cademiConfig.value.integration_id,
+    () => {
+        cademiTagQuery.value = '';
+        loadCademiTags();
+    }
+);
+
+async function saveCademiProductMapping() {
+    cademiError.value = '';
+    const ids = (cademiConfig.value.cademi_produto_ids || [])
+        .map((v) => String(v || '').trim())
+        .filter((v) => v !== '');
+    const parsedIds = ids
+        .map((v) => parseInt(v, 10))
+        .filter((n) => Number.isFinite(n) && n > 0);
+
+    if (cademiConfig.value.integration_id && parsedIds.length === 0) {
+        cademiError.value = 'Informe ao menos 1 Produto ID da Cademí.';
+        return;
+    }
+    cademiSaving.value = true;
+    try {
+        await axios.put(`/produtos/${props.produto.id}/external-member-area`, {
+            cademi_integration_id: cademiConfig.value.integration_id || null,
+            cademi_tag_id: cademiConfig.value.cademi_tag_id ? parseInt(cademiConfig.value.cademi_tag_id, 10) : null,
+            cademi_produto_ids: parsedIds,
+        });
+        router.reload({ only: ['produto', 'cademi_integrations'] });
+    } catch (err) {
+        cademiError.value = err.response?.data?.message || 'Erro ao salvar configuração da Cademí.';
+    } finally {
+        cademiSaving.value = false;
+    }
+}
 
 async function uploadEmailLogo(file) {
     if (!file || !file.type.startsWith('image/')) return;
@@ -908,6 +982,7 @@ function canShowRedundancy(slug) {
 const typeIcons = {
     aplicativo: Smartphone,
     area_membros: Users,
+    area_membros_externa: Users,
     link: Link2,
     link_pagamento: CreditCard,
 };
@@ -1591,6 +1666,124 @@ function submit() {
                             </button>
                         </div>
                         <p v-if="form.errors.type" class="mt-2 text-sm text-red-600 dark:text-red-400">{{ form.errors.type }}</p>
+                    </div>
+                </section>
+
+                <!-- Área de membros externa (Cademí) -->
+                <section
+                    v-if="form.type === 'area_membros_externa'"
+                    class="overflow-hidden rounded-2xl border border-zinc-200/80 bg-white shadow-sm dark:border-zinc-700/80 dark:bg-zinc-800/95"
+                >
+                    <div class="border-b border-zinc-200/80 bg-zinc-50/80 px-6 py-4 dark:border-zinc-700/80 dark:bg-zinc-800/50">
+                        <h2 class="text-base font-semibold text-zinc-900 dark:text-white">Área de membros externa (Cademí)</h2>
+                        <p class="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
+                            Se este produto for entregue via Cademí, configure aqui qual integração e qual TAG o aluno receberá após o pagamento.
+                        </p>
+                    </div>
+                    <div class="p-6 space-y-4">
+                        <div class="grid gap-4 sm:grid-cols-2">
+                            <div>
+                                <label class="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Integração Cademí</label>
+                                <select
+                                    v-model="cademiConfig.integration_id"
+                                    class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+                                >
+                                    <option value="">(desconectado)</option>
+                                    <option v-for="i in cademi_integrations" :key="i.id" :value="String(i.id)">
+                                        {{ i.name }}
+                                    </option>
+                                </select>
+                                <p v-if="cademi_integrations.length === 0" class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                    Nenhuma integração Cademí cadastrada. Vá em <Link href="/integracoes" class="text-[var(--color-primary)] hover:underline">/integracoes</Link> e crie uma.
+                                </p>
+                            </div>
+                            <div>
+                                <label class="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Produto ID (Cademí)</label>
+                                <div class="space-y-2">
+                                    <div v-for="(pid, idx) in cademiConfig.cademi_produto_ids" :key="idx" class="flex gap-2">
+                                        <input
+                                            v-model="cademiConfig.cademi_produto_ids[idx]"
+                                            type="number"
+                                            min="1"
+                                            placeholder="Ex: 231"
+                                            class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+                                        />
+                                        <Button type="button" variant="outline" :disabled="cademiConfig.cademi_produto_ids.length <= 1" @click="cademiConfig.cademi_produto_ids.splice(idx, 1)">
+                                            Remover
+                                        </Button>
+                                    </div>
+                                    <Button type="button" variant="outline" @click="cademiConfig.cademi_produto_ids.push('')">
+                                        Adicionar Produto ID
+                                    </Button>
+                                </div>
+                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                    Obrigatório para conceder acesso na Cademí.
+                                </p>
+                            </div>
+
+                            <div>
+                                <label class="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">TAG ID (Cademí) (opcional)</label>
+                                <div class="space-y-2">
+                                    <div class="flex gap-2">
+                                        <select
+                                            v-model="cademiConfig.cademi_tag_id"
+                                            class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+                                            :disabled="!cademiConfig.integration_id || cademiTagsLoading"
+                                        >
+                                            <option value="">Selecione uma TAG</option>
+                                            <option v-for="t in filteredCademiTags" :key="t.id" :value="String(t.id)">
+                                                {{ t.nome ? `${t.nome} (#${t.id})` : `#${t.id}` }}
+                                            </option>
+                                        </select>
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            :disabled="!cademiConfig.integration_id || cademiTagsLoading"
+                                            @click="loadCademiTags"
+                                        >
+                                            <Loader2 v-if="cademiTagsLoading" class="mr-2 h-4 w-4 animate-spin" />
+                                            Atualizar
+                                        </Button>
+                                    </div>
+
+                                    <input
+                                        v-model="cademiTagQuery"
+                                        type="text"
+                                        placeholder="Buscar TAG pelo nome…"
+                                        class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+                                        :disabled="!cademiConfig.integration_id || cademiTagsLoading || (cademiTags || []).length === 0"
+                                    />
+
+                                    <input
+                                        v-model="cademiConfig.cademi_tag_id"
+                                        type="number"
+                                        min="1"
+                                        placeholder="Ou cole o TAG ID (ex: 472)"
+                                        class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+                                        :disabled="!cademiConfig.integration_id"
+                                    />
+
+                                    <p v-if="cademiTagsError" class="text-xs text-red-600 dark:text-red-400">{{ cademiTagsError }}</p>
+                                    <p v-else-if="cademiConfig.integration_id && !cademiTagsLoading && (cademiTags || []).length === 0" class="text-xs text-zinc-500 dark:text-zinc-400">
+                                        Nenhuma TAG retornada pela Cademí (ou integração ainda não carregada).
+                                    </p>
+                                </div>
+                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                    Dica: selecione pelo nome (recomendado). Se necessário, cole o ID manualmente no campo acima.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="flex items-end">
+                            <Button type="button" class="w-full" :disabled="cademiSaving" @click="saveCademiProductMapping">
+                                <Loader2 v-if="cademiSaving" class="mr-2 h-4 w-4 animate-spin" />
+                                Salvar configuração Cademí
+                            </Button>
+                        </div>
+
+                        <p v-if="cademiError" class="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-300">
+                            {{ cademiError }}
+                        </p>
                     </div>
                 </section>
 

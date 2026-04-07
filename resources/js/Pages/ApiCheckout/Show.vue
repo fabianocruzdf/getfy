@@ -1,7 +1,15 @@
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { Head, useForm, usePage, router } from '@inertiajs/vue3';
 import { QrCode, Barcode, CreditCard, Receipt, ShieldCheck, AlertCircle, ArrowLeft } from 'lucide-vue-next';
+import {
+    API_CHECKOUT_PAGARME_TOKENIZE_FORM_ID,
+    PAGARME_TOKENIZE_FORM_ACTION,
+    loadPagarmeTokenizeScript,
+    ensurePagarmeCheckoutInit,
+    requestPagarmeTokenFromForm,
+    resetPagarmeTokenizeScriptState,
+} from '@/composables/usePagarmeTokenizecard.js';
 
 defineOptions({ layout: null });
 
@@ -26,6 +34,9 @@ const props = defineProps({
     card_stripe_link_enabled: { type: Boolean, default: true },
     card_efi_payee_code: { type: String, default: '' },
     card_efi_sandbox: { type: Boolean, default: false },
+    card_pagarme_public_key: { type: String, default: '' },
+    /** Base da API v5 para tokenização (igual config/services.pagarme.base_url). */
+    card_pagarme_api_base_url: { type: String, default: 'https://api.pagar.me/core/v5' },
 });
 
 const page = usePage();
@@ -37,6 +48,28 @@ function formatPrice(value, code) {
     if (Number.isNaN(n)) return '';
     const locale = code === 'BRL' ? 'pt-BR' : code === 'EUR' ? 'de-DE' : 'en-US';
     return new Intl.NumberFormat(locale, { style: 'currency', currency: code }).format(n);
+}
+
+/** Pagar.me: titular só com letras e espaços (API rejeita números no nome). */
+function getCsrfToken() {
+    const match = typeof document !== 'undefined' && document.cookie ? document.cookie.match(/XSRF-TOKEN=([^;]+)/) : null;
+    if (match) {
+        try {
+            return decodeURIComponent(match[1]);
+        } catch (_) {}
+    }
+    return '';
+}
+
+function sanitizePagarmeHolderName(raw) {
+    const s = String(raw || '')
+        .normalize('NFD')
+        .replace(/\p{M}/gu, '')
+        .replace(/[^a-zA-Z\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    return s.length >= 2 ? s : 'Cliente';
 }
 
 const displayTitle = computed(() => props.product_name || 'Pagamento');
@@ -104,7 +137,8 @@ function onError(errors) {
 
 const canPayWithStripe = computed(() => props.card_gateway_slug === 'stripe' && (props.card_stripe_publishable_key || '').trim() !== '');
 const canPayWithEfi = computed(() => props.card_gateway_slug === 'efi' && (props.card_efi_payee_code || '').trim() !== '');
-const canPayWithCard = computed(() => props.available_methods?.includes('card') && (canPayWithStripe.value || canPayWithEfi.value));
+const canPayWithPagarme = computed(() => props.card_gateway_slug === 'pagarme' && (props.card_pagarme_public_key || '').trim() !== '');
+const canPayWithCard = computed(() => props.available_methods?.includes('card') && (canPayWithStripe.value || canPayWithEfi.value || canPayWithPagarme.value));
 
 /** Método selecionado para exibir o bloco de ação (pix, boleto, card ou null). */
 const selectedMethod = ref(null);
@@ -118,6 +152,29 @@ const efiCardNumber = ref('');
 const efiCardExp = ref('');
 const efiCardCvv = ref('');
 const cardSubmitting = ref(false);
+
+/** tokenizecard.js exige exp_month/exp_year no DOM; derivamos do mesmo campo MM/AAAA que o Efí. */
+const pagarmeTokenizeExpMonthHidden = computed(() => {
+    const d = (efiCardExp.value || '').replace(/\D/g, '');
+    return d.slice(0, 2);
+});
+const pagarmeTokenizeExpYearHidden = computed(() => {
+    const d = (efiCardExp.value || '').replace(/\D/g, '');
+    return d.slice(2, 6);
+});
+
+const pagarmeTokenizeFormId = API_CHECKOUT_PAGARME_TOKENIZE_FORM_ID;
+
+const efiCardNumberDigits = computed(() => (efiCardNumber.value || '').replace(/\D/g, '').slice(0, 19));
+
+watch(
+    () => (props.card_pagarme_public_key || '').trim(),
+    (next, prev) => {
+        if (prev && next !== prev) {
+            resetPagarmeTokenizeScriptState();
+        }
+    }
+);
 
 async function initStripeCard() {
     if (!props.card_stripe_publishable_key?.trim() || !stripeCardRef.value) return;
@@ -220,6 +277,93 @@ async function submitCard(ev) {
                 payment_method: 'card',
                 payment_token: paymentMethod.id,
                 card_mask: paymentMethod.card?.last4 ? `**** ${paymentMethod.card.last4}` : '',
+            }, {
+                preserveScroll: true,
+                onError: (err) => {
+                    onError(err);
+                    cardSubmitting.value = false;
+                },
+                onFinish: () => { cardSubmitting.value = false; },
+            });
+            return;
+        }
+
+        if (canPayWithPagarme.value) {
+            const numberDigits = efiCardNumberDigits.value;
+            const expDigits = (efiCardExp.value || '').replace(/\D/g, '');
+            const month = expDigits.slice(0, 2);
+            let yearRaw = expDigits.slice(2);
+            if (yearRaw.length === 2) {
+                yearRaw = `20${yearRaw}`;
+            }
+            const cvv = (efiCardCvv.value || '').replace(/\D/g, '').slice(0, 4);
+            const monthNum = parseInt(month, 10);
+            const expYearNum = parseInt(yearRaw, 10);
+            if (month.length !== 2 || yearRaw.length !== 4 || !Number.isFinite(monthNum) || monthNum < 1 || monthNum > 12
+                || !Number.isFinite(expYearNum)) {
+                error.value = 'Informe a validade no formato MM/AAAA (como no cartão Efí).';
+                cardSubmitting.value = false;
+                return;
+            }
+            if (numberDigits.length < 13 || numberDigits.length > 19 || cvv.length < 3) {
+                error.value = 'Preencha todos os dados do cartão corretamente.';
+                cardSubmitting.value = false;
+                return;
+            }
+            const pk = (props.card_pagarme_public_key || '').trim();
+            const holderName = sanitizePagarmeHolderName(name);
+            let tokenId;
+            await nextTick();
+            try {
+                await loadPagarmeTokenizeScript(pk);
+                ensurePagarmeCheckoutInit();
+                const { token } = await requestPagarmeTokenFromForm(pagarmeTokenizeFormId);
+                tokenId = token;
+            } catch {
+                const base = String(props.card_pagarme_api_base_url || 'https://api.pagar.me/core/v5').replace(/\/$/, '');
+                const url = `${base}/tokens?appId=${encodeURIComponent(pk)}`;
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                    body: JSON.stringify({
+                        type: 'card',
+                        card: {
+                            number: numberDigits,
+                            holder_name: holderName,
+                            exp_month: monthNum,
+                            exp_year: expYearNum,
+                            cvv: String(cvv),
+                        },
+                    }),
+                });
+                let data = {};
+                try {
+                    data = await res.json();
+                } catch {
+                    data = {};
+                }
+                if (!res.ok) {
+                    let m = typeof data?.message === 'string' ? data.message : 'Não foi possível tokenizar o cartão.';
+                    if (/n[uú]mero do cart[aã]o|cart[aã]o inv[aá]lido|invalid card/i.test(m)) {
+                        m += ' Sandbox: Visa 4000000000000010, validade futura, CVV 123, chaves pk_test_/sk_test_ na mesma conta.';
+                    }
+                    error.value = m;
+                    cardSubmitting.value = false;
+                    return;
+                }
+                tokenId = data?.id;
+                if (!tokenId || typeof tokenId !== 'string') {
+                    error.value = 'Resposta inválida da Pagar.me.';
+                    cardSubmitting.value = false;
+                    return;
+                }
+            }
+            const last4 = numberDigits.slice(-4);
+            router.post('/api-checkout/pay', {
+                session_token: props.session_token,
+                payment_method: 'card',
+                payment_token: JSON.stringify({ card_token: tokenId, installments: 1 }),
+                card_mask: last4 ? `**** ${last4}` : '',
             }, {
                 preserveScroll: true,
                 onError: (err) => {
@@ -533,11 +677,94 @@ async function submitCard(ev) {
                                         v-model="cardHolderName"
                                         type="text"
                                         autocomplete="cc-name"
+                                        :form="canPayWithPagarme ? pagarmeTokenizeFormId : undefined"
+                                        :data-pagarmecheckout-element="canPayWithPagarme ? 'holder_name' : undefined"
+                                        :name="canPayWithPagarme ? 'api_pagarme_holder_name' : undefined"
                                         class="w-full rounded-lg border border-zinc-300 bg-white px-4 py-3 text-zinc-900 shadow-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
                                         placeholder="Como está no cartão"
                                     />
                                 </div>
-                                <template v-if="canPayWithEfi">
+                                <template v-if="canPayWithPagarme">
+                                    <div class="relative">
+                                        <label for="card-number-api-pagarme" class="mb-2 block text-sm font-medium text-zinc-700">Número do cartão</label>
+                                        <input
+                                            id="card-number-api-pagarme"
+                                            v-model="efiCardNumber"
+                                            type="text"
+                                            inputmode="numeric"
+                                            autocomplete="cc-number"
+                                            class="w-full rounded-lg border border-zinc-300 bg-white px-4 py-3 text-zinc-900 shadow-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                                            placeholder="0000 0000 0000 0000"
+                                        />
+                                        <input
+                                            type="text"
+                                            readonly
+                                            tabindex="-1"
+                                            autocomplete="off"
+                                            :value="efiCardNumberDigits"
+                                            :form="pagarmeTokenizeFormId"
+                                            data-pagarmecheckout-element="number"
+                                            name="api_pagarme_number"
+                                            class="absolute h-px w-px overflow-hidden border-0 p-0 opacity-0"
+                                            aria-hidden="true"
+                                        />
+                                        <input
+                                            type="text"
+                                            readonly
+                                            tabindex="-1"
+                                            autocomplete="off"
+                                            :value="pagarmeTokenizeExpMonthHidden"
+                                            :form="pagarmeTokenizeFormId"
+                                            data-pagarmecheckout-element="exp_month"
+                                            name="api_pagarme_exp_month"
+                                            class="absolute left-0 top-0 h-px w-px overflow-hidden border-0 p-0 opacity-0"
+                                            aria-hidden="true"
+                                        />
+                                        <input
+                                            type="text"
+                                            readonly
+                                            tabindex="-1"
+                                            autocomplete="off"
+                                            :value="pagarmeTokenizeExpYearHidden"
+                                            :form="pagarmeTokenizeFormId"
+                                            data-pagarmecheckout-element="exp_year"
+                                            name="api_pagarme_exp_year"
+                                            class="absolute left-0 top-0 h-px w-px overflow-hidden border-0 p-0 opacity-0"
+                                            aria-hidden="true"
+                                        />
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label for="card-exp-pagarme-api" class="mb-2 block text-sm font-medium text-zinc-700">Validade (MM/AAAA)</label>
+                                            <input
+                                                id="card-exp-pagarme-api"
+                                                v-model="efiCardExp"
+                                                type="text"
+                                                inputmode="numeric"
+                                                autocomplete="cc-exp"
+                                                class="w-full rounded-lg border border-zinc-300 bg-white px-4 py-3 text-zinc-900 shadow-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                                                placeholder="MM/AAAA"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label for="card-cvv-pagarme-api" class="mb-2 block text-sm font-medium text-zinc-700">CVV</label>
+                                            <input
+                                                id="card-cvv-pagarme-api"
+                                                v-model="efiCardCvv"
+                                                type="text"
+                                                inputmode="numeric"
+                                                autocomplete="cc-csc"
+                                                maxlength="4"
+                                                :form="pagarmeTokenizeFormId"
+                                                data-pagarmecheckout-element="cvv"
+                                                name="api_pagarme_cvv"
+                                                class="w-full rounded-lg border border-zinc-300 bg-white px-4 py-3 text-zinc-900 shadow-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                                                placeholder="123"
+                                            />
+                                        </div>
+                                    </div>
+                                </template>
+                                <template v-else-if="canPayWithEfi">
                                     <div>
                                         <label for="card-number-efi" class="mb-2 block text-sm font-medium text-zinc-700">Número do cartão</label>
                                         <input
@@ -619,5 +846,18 @@ async function submitCard(ev) {
                 </p>
             </div>
         </main>
+        <form
+            v-if="canPayWithPagarme && (card_pagarme_public_key || '').trim()"
+            :id="pagarmeTokenizeFormId"
+            method="post"
+            :action="PAGARME_TOKENIZE_FORM_ACTION"
+            data-pagarmecheckout-form
+            class="sr-only"
+            aria-hidden="true"
+            @submit.prevent
+        >
+            <input type="hidden" name="_token" :value="getCsrfToken()" />
+            <span data-pagarmecheckout-element="brand" class="hidden" aria-hidden="true" />
+        </form>
     </div>
 </template>

@@ -22,6 +22,7 @@ use App\Services\MemberCommentService;
 use App\Services\StorageService;
 use App\Services\GamificationService;
 use App\Services\MemberProgressService;
+use App\Services\TeamAccessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -261,10 +262,14 @@ class MemberBuilderController extends Controller
                 ->all(),
         ];
 
-        $tenant_products = Product::forTenant($produto->tenant_id)
+        $tenantProductsQuery = Product::forTenant($produto->tenant_id)
             ->where('id', '!=', $produto->id)
-            ->orderBy('name')
-            ->get(['id', 'name', 'image'])
+            ->orderBy('name');
+        if (auth()->user()?->isTeam()) {
+            $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
+            $tenantProductsQuery->whereIn('id', $allowed ?: ['__none__']);
+        }
+        $tenant_products = $tenantProductsQuery->get(['id', 'name', 'image'])
             ->map(fn (Product $p) => [
                 'id' => $p->id,
                 'name' => $p->name,
@@ -1254,6 +1259,13 @@ class MemberBuilderController extends Controller
         $tenantId = auth()->user()->tenant_id;
         if ($produto->tenant_id !== $tenantId) {
             abort(403);
+        }
+
+        if (auth()->user()->isTeam()) {
+            $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
+            if (! in_array($produto->id, $allowed, true)) {
+                abort(403);
+            }
         }
     }
 

@@ -7,6 +7,7 @@ import AppCard from '@/components/integrations/AppCard.vue';
 import SpedySidebar from '@/components/integrations/SpedySidebar.vue';
 import UtmifySidebar from '@/components/integrations/UtmifySidebar.vue';
 import WebhookSidebar from '@/components/integrations/WebhookSidebar.vue';
+import CademiSidebar from '@/components/integrations/CademiSidebar.vue';
 import GatewayCard from '@/components/settings/GatewayCard.vue';
 import GatewayConfigSidebar from '@/components/settings/GatewayConfigSidebar.vue';
 import { CreditCard, Zap } from 'lucide-vue-next';
@@ -37,6 +38,12 @@ const APPS_BASE = [
         description: 'Emissão automática de notas fiscais. Envie vendas para a Spedy e emita NF-e/NFS-e.',
         image: 'images/integrations/spedy.png',
     },
+    {
+        id: 'cademi',
+        name: 'Cademí',
+        description: 'Área de membros externa. Após a compra, sincronize o aluno e conceda acesso na Cademí.',
+        image: 'images/integrations/cademi.png',
+    },
 ];
 
 const props = defineProps({
@@ -49,6 +56,7 @@ const props = defineProps({
     webhook_events: { type: Object, default: () => ({}) },
     utmify_integrations: { type: Array, default: () => [] },
     spedy_integrations: { type: Array, default: () => [] },
+    cademi_integrations: { type: Array, default: () => [] },
     products: { type: Array, default: () => [] },
 });
 
@@ -72,6 +80,15 @@ const APPS = computed(() =>
                 status: hasActive ? 'active' : undefined,
             };
         }
+        if (app.id === 'cademi') {
+            const hasActive = (props.cademi_integrations || []).some(
+                (i) => i.configured && i.is_active
+            );
+            return {
+                ...app,
+                status: hasActive ? 'active' : undefined,
+            };
+        }
         return app;
     })
 );
@@ -81,6 +98,7 @@ const selectedGatewaySlug = ref(null);
 const webhookSidebarOpen = ref(false);
 const utmifySidebarOpen = ref(false);
 const spedySidebarOpen = ref(false);
+const cademiSidebarOpen = ref(false);
 
 function openGatewaySidebar(slug) {
     selectedGatewaySlug.value = slug;
@@ -116,6 +134,14 @@ function closeSpedySidebar() {
     spedySidebarOpen.value = false;
 }
 
+function openCademiSidebar() {
+    cademiSidebarOpen.value = true;
+}
+
+function closeCademiSidebar() {
+    cademiSidebarOpen.value = false;
+}
+
 function onGatewaySaved() {
     router.reload({ only: ['gateways', 'gateway_order'] });
 }
@@ -133,6 +159,10 @@ function onSpedySaved() {
     router.reload({ only: ['spedy_integrations', 'products'] });
 }
 
+function onCademiSaved() {
+    router.reload({ only: ['cademi_integrations', 'products'] });
+}
+
 function onAppClick(app) {
     if (app.id === 'webhook') {
         openWebhookSidebar();
@@ -140,6 +170,8 @@ function onAppClick(app) {
         openUtmifySidebar();
     } else if (app.id === 'spedy') {
         openSpedySidebar();
+    } else if (app.id === 'cademi') {
+        openCademiSidebar();
     }
 }
 
@@ -253,6 +285,13 @@ function setTab(tabId) {
             :products="products"
             @close="closeSpedySidebar"
             @saved="onSpedySaved"
+        />
+        <CademiSidebar
+            :open="cademiSidebarOpen"
+            :cademi_integrations="cademi_integrations"
+            :products="products"
+            @close="closeCademiSidebar"
+            @saved="onCademiSaved"
         />
     </div>
 </template>

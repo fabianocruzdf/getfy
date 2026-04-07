@@ -126,6 +126,21 @@ class AccessEmailService
             }
             $subject = 'Renovação confirmada — ' . $product->name;
             $bodyHtml = $this->buildRenewalSuccessBody($customerName, $product->name);
+        } elseif ($product->type === Product::TYPE_AREA_MEMBROS_EXTERNA) {
+            // Entrega externa: não enviar e-mail de acesso (link/senha).
+            $cacheKey = 'access_email_sent.' . $order->id;
+            if (! $force && ! Cache::add($cacheKey, true, now()->addHours(1))) {
+                Log::info('AccessEmailService: e-mail (entrega externa) já enviado (evitando duplicado).', [
+                    'order_id' => $order->id,
+                    'product_type' => $product->type,
+                    'tenant_id_for_mail' => $tenantIdForMail,
+                ]);
+
+                return true;
+            }
+
+            $subject = 'Compra confirmada — ' . $product->name;
+            $bodyHtml = $this->buildExternalMemberAreaPendingBody($customerName, $product->name);
         } else {
             // Compra única / nova assinatura: evitar envio duplicado (webhook pode disparar OrderCompleted mais de uma vez)
             $cacheKey = 'access_email_sent.' . $order->id;
@@ -394,5 +409,10 @@ class AccessEmailService
     private function buildRenewalSuccessBody(string $customerName, string $productName): string
     {
         return '<table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;margin:0 auto;font-family:\'Segoe UI\',Tahoma,sans-serif;background:#f8fafc;padding:32px 24px;"><tr><td style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);"><table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:32px 32px 24px;text-align:center;border-bottom:1px solid #e2e8f0;"><h1 style="margin:0;font-size:22px;font-weight:600;color:#0f172a;">Olá, '.e($customerName).'!</h1></td></tr><tr><td style="padding:28px 32px;"><p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:#334155;">Sua renovação da assinatura de <strong>'.e($productName).'</strong> foi confirmada com sucesso.</p><p style="margin:0;font-size:16px;line-height:1.6;color:#334155;">Você continua com acesso total ao conteúdo. Não é necessário fazer nada.</p></td></tr><tr><td style="padding:20px 32px;background:#f1f5f9;border-radius:0 0 12px 12px;"><p style="margin:0;font-size:13px;color:#64748b;">Qualquer dúvida, responda este e-mail.</p></td></tr></table></td></tr></table>';
+    }
+
+    private function buildExternalMemberAreaPendingBody(string $customerName, string $productName): string
+    {
+        return '<table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;margin:0 auto;font-family:\'Segoe UI\',Tahoma,sans-serif;background:#f8fafc;padding:32px 24px;"><tr><td style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);"><table width="100%" cellpadding="0" cellspacing="0"><tr><td style="padding:32px 32px 24px;text-align:center;border-bottom:1px solid #e2e8f0;"><h1 style="margin:0;font-size:22px;font-weight:600;color:#0f172a;">Olá, '.e($customerName).'!</h1></td></tr><tr><td style="padding:28px 32px;"><p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:#334155;">Seu pagamento de <strong>'.e($productName).'</strong> foi confirmado.</p><p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:#334155;">Este produto é entregue em uma <strong>área de membros externa</strong>. Em instantes você receberá o acesso.</p><p style="margin:0;font-size:14px;line-height:1.6;color:#64748b;">Se você não receber o acesso em alguns minutos, entre em contato com o suporte do vendedor.</p></td></tr><tr><td style="padding:20px 32px;background:#f1f5f9;border-radius:0 0 12px 12px;"><p style="margin:0;font-size:13px;color:#64748b;">Qualquer dúvida, responda este e-mail.</p></td></tr></table></td></tr></table>';
     }
 }

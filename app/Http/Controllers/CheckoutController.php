@@ -290,6 +290,9 @@ class CheckoutController extends Controller
                     $payload['card_gateway_keys'][$slug][$key] = $creds[$key];
                 }
             }
+            if ($slug === 'pagarme') {
+                $payload['card_gateway_keys'][$slug]['api_base_url'] = rtrim((string) config('services.pagarme.base_url', 'https://api.pagar.me/core/v5'), '/');
+            }
         }
         if (array_key_exists('stripe_link_enabled', $config)) {
             $payload['card_stripe_link_enabled'] = (bool) $config['stripe_link_enabled'];
@@ -408,7 +411,19 @@ class CheckoutController extends Controller
         }
         $displayCurrencyInput = $request->input('display_currency');
         $displayCurrency = is_string($displayCurrencyInput) && $displayCurrencyInput !== '' ? strtoupper($displayCurrencyInput) : $effectiveCurrency;
-        $requireCpf = ($customerFields['cpf'] ?? false) && $displayCurrency === 'BRL';
+
+        $paymentService = app(PaymentService::class);
+        $paymentMethodForRules = $request->input('payment_method');
+        $firstPixGateway = $paymentMethodForRules === 'pix'
+            ? $paymentService->getFirstAvailableGatewayForMethod($product->tenant_id, 'pix', $product)
+            : null;
+        $firstCardGatewayForRules = $paymentMethodForRules === 'card'
+            ? $paymentService->getFirstAvailableGatewayForMethod($product->tenant_id, 'card', $product)
+            : null;
+        $requireCpf = (($customerFields['cpf'] ?? false) && $displayCurrency === 'BRL')
+            || ($firstCardGatewayForRules === 'pagarme' && $displayCurrency === 'BRL');
+        $phoneRequiredForCheckout = ($customerFields['phone'] ?? false)
+            || ($paymentMethodForRules === 'pix' && $firstPixGateway === 'pagarme');
 
         $rules = [
             'product_id' => ['required', 'exists:products,id'],
@@ -423,23 +438,29 @@ class CheckoutController extends Controller
             'email' => ['required', 'email'],
             'name' => [($customerFields['name'] ?? true) ? 'required' : 'nullable', 'string', 'max:255'],
             'cpf' => [$requireCpf ? 'required' : 'nullable', 'string', 'max:11'],
-            'phone' => [($customerFields['phone'] ?? false) ? 'required' : 'nullable', 'string', 'max:24'],
+            'phone' => [$phoneRequiredForCheckout ? 'required' : 'nullable', 'string', 'max:24'],
             'coupon_code' => ['nullable', 'string', 'max:64'],
             'utm_source' => ['nullable', 'string', 'max:255'],
             'utm_medium' => ['nullable', 'string', 'max:255'],
             'utm_campaign' => ['nullable', 'string', 'max:255'],
         ];
         if ($request->input('payment_method') === 'card') {
-            $paymentService = app(PaymentService::class);
-            $cardGateways = $paymentService->getGatewayOrderForMethod($product->tenant_id, 'card', $product);
-            $cardGatewaysIncludeAsaas = in_array('asaas', $cardGateways, true);
-            if ($cardGatewaysIncludeAsaas) {
+            $firstCardGateway = $firstCardGatewayForRules ?? $paymentService->getFirstAvailableGatewayForMethod($product->tenant_id, 'card', $product);
+            if ($firstCardGateway === 'asaas') {
                 $rules['payment_token'] = ['nullable', 'string', 'max:10000'];
                 $rules['card_holder_name'] = ['required_without:payment_token', 'string', 'max:255'];
                 $rules['card_number'] = ['required_without:payment_token', 'string', 'max:19'];
                 $rules['card_expiry_month'] = ['required_without:payment_token', 'string', 'size:2'];
                 $rules['card_expiry_year'] = ['required_without:payment_token', 'string', 'max:4'];
                 $rules['card_ccv'] = ['required_without:payment_token', 'string', 'max:4'];
+                $rules['address_zipcode'] = ['required', 'string', 'max:9'];
+                $rules['address_street'] = ['required', 'string', 'max:255'];
+                $rules['address_number'] = ['required', 'string', 'max:20'];
+                $rules['address_neighborhood'] = ['required', 'string', 'max:255'];
+                $rules['address_city'] = ['required', 'string', 'max:255'];
+                $rules['address_state'] = ['required', 'string', 'max:2'];
+            } elseif ($firstCardGateway === 'pagarme') {
+                $rules['payment_token'] = ['required', 'string', 'max:10000'];
                 $rules['address_zipcode'] = ['required', 'string', 'max:9'];
                 $rules['address_street'] = ['required', 'string', 'max:255'];
                 $rules['address_number'] = ['required', 'string', 'max:20'];
@@ -672,6 +693,7 @@ class CheckoutController extends Controller
                         : $fake['name'],
                     'document' => strlen($rawDoc) >= 11 ? $rawDoc : $fake['document'],
                     'email' => $validated['email'],
+                    'phone' => trim((string) ($validated['phone'] ?? '')),
                 ];
                 $pixResult = $paymentService->createPixPayment($order, $product, $consumer);
                 event(new PixGenerated($order, [
@@ -1089,7 +1111,12 @@ class CheckoutController extends Controller
                         }
                     }
                 }
-                if ($request->expectsJson() || $request->header('X-Requested-With') === 'XMLHttpRequest') {
+                $wantsJson = $request->expectsJson() || $request->header('X-Requested-With') === 'XMLHttpRequest';
+                if ($wantsJson && $redirectUrl === null) {
+                    $next = ($order->user_id && User::find($order->user_id)) ? 'member-area' : 'login';
+                    $redirectUrl = route('checkout.thank-you', ['order_id' => $order->id, 'next' => $next]);
+                }
+                if ($wantsJson) {
                     $json = [
                         'success' => true,
                         'payment_method' => 'card',

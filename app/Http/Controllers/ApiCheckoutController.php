@@ -87,6 +87,7 @@ class ApiCheckoutController extends Controller
         $cardStripeLinkEnabled = true;
         $cardEfiPayeeCode = '';
         $cardEfiSandbox = false;
+        $cardPagarmePublicKey = '';
         $efiHasCertificate = false;
 
         if ($cardGatewaySlug === 'stripe') {
@@ -110,6 +111,15 @@ class ApiCheckoutController extends Controller
                 $efiHasCertificate = $certPath !== '' && is_file($certPath);
             }
             if (trim($cardEfiPayeeCode) === '' || ! $efiHasCertificate) {
+                $firstCardGateway = null;
+            }
+        } elseif ($cardGatewaySlug === 'pagarme') {
+            $cred = GatewayCredential::forTenant($tenantId)->where('gateway_slug', 'pagarme')->where('is_connected', true)->first();
+            if ($cred) {
+                $creds = $cred->getDecryptedCredentials();
+                $cardPagarmePublicKey = (string) ($creds['public_key'] ?? '');
+            }
+            if (trim($cardPagarmePublicKey) === '') {
                 $firstCardGateway = null;
             }
         }
@@ -177,6 +187,8 @@ class ApiCheckoutController extends Controller
             'card_stripe_link_enabled' => $cardStripeLinkEnabled,
             'card_efi_payee_code' => $cardEfiPayeeCode,
             'card_efi_sandbox' => $cardEfiSandbox,
+            'card_pagarme_public_key' => $cardPagarmePublicKey,
+            'card_pagarme_api_base_url' => rtrim((string) config('services.pagarme.base_url', 'https://api.pagar.me/core/v5'), '/'),
         ]);
     }
 
@@ -225,6 +237,15 @@ class ApiCheckoutController extends Controller
             return redirect()->back()->with('error', 'Método de pagamento não disponível.');
         }
         $customer = is_array($session->customer) ? $session->customer : [];
+        if ($method === 'card') {
+            $cardGw = strtolower((string) ($pg['card'] ?? ''));
+            if ($cardGw === 'pagarme' && strtoupper((string) ($session->currency ?? 'BRL')) === 'BRL') {
+                $cpfDigits = preg_replace('/\D/', '', (string) ($customer['cpf'] ?? ''));
+                if (strlen($cpfDigits) < 11) {
+                    return redirect()->back()->with('error', 'CPF do comprador é obrigatório para cartão Pagar.me em BRL. Inclua `cpf` no customer ao criar a sessão de checkout.');
+                }
+            }
+        }
         if ($method === 'pix_auto') {
             $cpf = (string) ($validated['cpf'] ?? '');
             $customer['cpf'] = $cpf;
@@ -253,6 +274,7 @@ class ApiCheckoutController extends Controller
             'name' => $name ?: $fake['name'],
             'document' => strlen($rawDoc) >= 11 ? $rawDoc : $fake['document'],
             'email' => $email,
+            'phone' => trim((string) ($customer['phone'] ?? '')),
         ];
 
         $product = null;
@@ -303,6 +325,13 @@ class ApiCheckoutController extends Controller
         $availableGateway = $paymentService->getFirstAvailableGatewayForMethod($tenantId, $method, $product, $gatewayConfig);
         if ($availableGateway === null) {
             return redirect()->back()->with('error', 'Método de pagamento não disponível.');
+        }
+
+        if ($method === 'pix') {
+            $pixGw = $paymentService->getFirstAvailableGatewayForMethod($tenantId, 'pix', $product, $gatewayConfig);
+            if ($pixGw === 'pagarme' && trim((string) ($customer['phone'] ?? '')) === '') {
+                return redirect()->back()->with('error', 'Telefone do comprador é obrigatório para PIX (Pagar.me). Inclua phone ao criar a sessão de checkout.');
+            }
         }
 
         $order = Order::create([

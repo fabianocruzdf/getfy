@@ -52,6 +52,11 @@ export const gatewayMethodComponents = {
         card: DefaultMethodCard,
         boleto: DefaultMethodCard,
     },
+    pagarme: {
+        pix: DefaultMethodCard,
+        card: DefaultMethodCard,
+        boleto: DefaultMethodCard,
+    },
 };
 
 /**

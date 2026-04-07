@@ -141,6 +141,7 @@ class UpsellController extends Controller
         $redirectUrl = $next === 'login' ? route('login') : route('member-area.index');
         $redirectLabel = $next === 'login' ? 'Fazer login' : 'Acessar área de membros';
         $subtitle = 'Seu pedido foi registrado. Acesse o conteúdo pelo link abaixo.';
+        $showButton = true;
 
         $orderId = $request->integer('order_id', 0);
         $conversionPixels = Product::defaultConversionPixels();
@@ -150,19 +151,26 @@ class UpsellController extends Controller
             if ($order && $order->product) {
                 $conversionPixels = $order->product->conversion_pixels ?? $conversionPixels;
                 $orderAmount = (float) $order->amount;
+                if ($order->product->type === Product::TYPE_AREA_MEMBROS_EXTERNA) {
+                    // Entrega externa: não exibir botão de acesso interno.
+                    $showButton = false;
+                    $subtitle = 'Pagamento confirmado. Em instantes você receberá o acesso à área de membros.';
+                }
                 if ($order->product->type === Product::TYPE_LINK_PAGAMENTO) {
                     $slug = $order->getCheckoutSlug();
                     $redirectUrl = $slug !== '' ? route('checkout.show', ['slug' => $slug]) : url('/');
                     $redirectLabel = 'Voltar';
                     $subtitle = 'Seu pedido foi registrado. Você pode voltar para o site agora.';
                 }
-                $accessLink = $accessEmailService->getAccessLinkForOrder($order);
-                if ($accessLink !== '') {
-                    $redirectUrl = $accessLink;
-                    $redirectLabel = $order->product->type === Product::TYPE_LINK
-                        ? 'Acessar conteúdo'
-                        : 'Acessar área de membros';
-                    $subtitle = 'Seu pedido foi registrado. Acesse o conteúdo pelo link abaixo.';
+                if ($order->product->type !== Product::TYPE_AREA_MEMBROS_EXTERNA) {
+                    $accessLink = $accessEmailService->getAccessLinkForOrder($order);
+                    if ($accessLink !== '') {
+                        $redirectUrl = $accessLink;
+                        $redirectLabel = $order->product->type === Product::TYPE_LINK
+                            ? 'Acessar conteúdo'
+                            : 'Acessar área de membros';
+                        $subtitle = 'Seu pedido foi registrado. Acesse o conteúdo pelo link abaixo.';
+                    }
                 }
             }
         }
@@ -171,6 +179,7 @@ class UpsellController extends Controller
             'redirect_url' => $redirectUrl,
             'redirect_label' => $redirectLabel,
             'subtitle' => $subtitle,
+            'show_button' => $showButton,
             'conversion_pixels' => $conversionPixels,
             'order_id' => $orderId > 0 ? $orderId : null,
             'order_amount' => $orderAmount,

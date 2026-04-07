@@ -6,6 +6,7 @@ use App\Events\DashboardLoading;
 use App\Models\Order;
 use App\Models\Product;
 use Carbon\Carbon;
+use App\Services\TeamAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Inertia\Inertia;
@@ -31,6 +32,10 @@ class DashboardController extends Controller
             [$start, $end] = $this->rangeForPeriod($period);
 
             $ordersQuery = Order::forTenant($tenantId);
+            if (auth()->user()?->isTeam()) {
+                $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
+                $ordersQuery->whereIn('product_id', $allowed ?: ['__none__']);
+            }
         if ($start && $end) {
             $ordersQuery->whereBetween('created_at', [$start, $end]);
         } elseif ($start) {
@@ -69,7 +74,12 @@ class DashboardController extends Controller
 
         $graficoVendas = $this->buildGraficoVendas($tenantId, $period, $start, $end);
 
-        $quantidadeProdutos = Product::forTenant($tenantId)->count();
+        $productsQuery = Product::forTenant($tenantId);
+        if (auth()->user()?->isTeam()) {
+            $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
+            $productsQuery->whereIn('id', $allowed ?: ['__none__']);
+        }
+        $quantidadeProdutos = $productsQuery->count();
 
             return [
                 'period' => $period,
@@ -148,6 +158,10 @@ class DashboardController extends Controller
     private function buildGraficoVendas(?int $tenantId, string $period, ?string $start, ?string $end): array
     {
         $query = Order::forTenant($tenantId)->where('status', 'completed');
+        if (auth()->user()?->isTeam()) {
+            $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
+            $query->whereIn('product_id', $allowed ?: ['__none__']);
+        }
 
         if ($start && $end) {
             $query->whereBetween('created_at', [$start, $end]);

@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed } from 'vue';
-import { router, useForm } from '@inertiajs/vue3';
+import { Link, router, useForm, usePage } from '@inertiajs/vue3';
 import LayoutInfoprodutor from '@/Layouts/LayoutInfoprodutor.vue';
 import Button from '@/components/ui/Button.vue';
 import { UserPlus, Trash2, Shield, User, Pencil, X } from 'lucide-vue-next';
@@ -10,6 +10,20 @@ defineOptions({ layout: LayoutInfoprodutor });
 const props = defineProps({
     users: { type: Array, default: () => [] },
 });
+
+const page = usePage();
+
+const userTabs = [
+    { key: 'usuarios', label: 'Infoprodutores', href: '/usuarios' },
+    { key: 'equipe', label: 'Equipe', href: '/usuarios/equipe' },
+];
+function isUsersTabActive(href) {
+    // Evitar que "/usuarios" fique ativo em "/usuarios/equipe"
+    if (href === '/usuarios') {
+        return page.url === '/usuarios' || page.url.startsWith('/usuarios?');
+    }
+    return page.url === href || page.url.startsWith(href + '/') || page.url.startsWith(href + '?');
+}
 
 const showCreateModal = ref(false);
 const editUser = ref(null);
@@ -106,6 +120,29 @@ function confirmDelete(u) {
                 Novo infoprodutor
             </Button>
         </div>
+
+        <!-- Abas Usuários -->
+        <nav
+            class="inline-flex rounded-xl bg-zinc-100/80 p-1 dark:bg-zinc-800/80"
+            aria-label="Abas de usuários"
+        >
+            <Link
+                v-for="t in userTabs"
+                :key="t.key"
+                :href="t.href"
+                :class="[
+                    'flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all duration-200',
+                    isUsersTabActive(t.href)
+                        ? 'bg-white text-[var(--color-primary)] shadow-sm dark:bg-zinc-700 dark:text-[var(--color-primary)]'
+                        : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white',
+                ]"
+                :aria-current="isUsersTabActive(t.href) ? 'page' : undefined"
+            >
+                <Shield v-if="t.key === 'usuarios'" class="h-4 w-4 shrink-0" aria-hidden="true" />
+                <User v-else class="h-4 w-4 shrink-0" aria-hidden="true" />
+                {{ t.label }}
+            </Link>
+        </nav>
 
         <div class="rounded-xl border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/80 overflow-hidden">
             <ul class="divide-y divide-zinc-200 dark:divide-zinc-700">

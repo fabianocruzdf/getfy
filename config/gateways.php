@@ -137,6 +137,24 @@ return [
                 ['key' => 'sandbox', 'label' => 'Usar ambiente de homologação (sandbox)', 'type' => 'boolean'],
             ],
         ],
+        'pagarme' => [
+            'slug' => 'pagarme',
+            'name' => 'Pagar.me',
+            'image' => 'images/gateways/pagarme.png',
+            'methods' => ['pix', 'card', 'boleto'],
+            'scope' => 'national',
+            'country' => 'br',
+            'country_name' => 'Brasil',
+            'country_flag' => 'brasil.png',
+            'signup_url' => 'https://pagar.me',
+            'driver' => \App\Gateways\Pagarme\PagarmeDriver::class,
+            'checkout_payload_keys' => ['public_key'],
+            'credential_keys' => [
+                ['key' => 'secret_key', 'label' => 'Secret Key', 'type' => 'password'],
+                ['key' => 'public_key', 'label' => 'Public Key', 'type' => 'text'],
+                ['key' => 'sandbox', 'label' => 'Sandbox', 'type' => 'boolean'],
+            ],
+        ],
     ],
 
     /*
@@ -145,9 +163,9 @@ return [
     |--------------------------------------------------------------------------
     */
     'default_order' => [
-        'pix' => ['cajupay', 'spacepag', 'efi', 'mercadopago', 'pushinpay', 'asaas'],
-        'card' => ['efi', 'stripe', 'mercadopago', 'asaas'],
-        'boleto' => ['efi', 'mercadopago', 'asaas'],
+        'pix' => ['cajupay', 'spacepag', 'efi', 'mercadopago', 'pagarme', 'pushinpay', 'asaas'],
+        'card' => ['efi', 'stripe', 'mercadopago', 'pagarme', 'asaas'],
+        'boleto' => ['efi', 'mercadopago', 'pagarme', 'asaas'],
         'pix_auto' => ['efi', 'pushinpay'],
         'crypto' => [],
     ],

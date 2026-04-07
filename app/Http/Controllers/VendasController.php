@@ -9,6 +9,7 @@ use App\Models\ProductOffer;
 use App\Models\OrderItem;
 use App\Models\Subscription;
 use App\Services\AccessEmailService;
+use App\Services\TeamAccessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -218,6 +219,12 @@ class VendasController extends Controller
     {
         $statusFilter = $this->normalizeStatusFilter($request);
         $query = Order::forTenant($tenantId);
+
+        if (auth()->user()?->isTeam()) {
+            $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
+            $query->whereIn('product_id', $allowed ?: ['__none__']);
+        }
+
         $query = $this->applyStatusFilter($query, $statusFilter);
         $query = $this->applyPeriodFilter($query, $request);
         $query = $this->applySearchFilter($query, $request);
@@ -314,7 +321,12 @@ class VendasController extends Controller
             'vendas_boleto' => $vendasBoleto,
         ];
 
-        $products = Product::forTenant($tenantId)->orderBy('name')->get(['id', 'name']);
+        $productsQuery = Product::forTenant($tenantId)->orderBy('name');
+        if (auth()->user()->isTeam()) {
+            $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
+            $productsQuery->whereIn('id', $allowed ?: ['__none__']);
+        }
+        $products = $productsQuery->get(['id', 'name']);
         $offers = ProductOffer::query()
             ->whereHas('product', fn ($q) => $q->forTenant($tenantId))
             ->with('product:id,name')
@@ -329,6 +341,11 @@ class VendasController extends Controller
             ])
             ->values()
             ->all();
+
+        if (auth()->user()->isTeam()) {
+            $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
+            $offers = array_values(array_filter($offers, fn ($o) => in_array($o['product_id'], $allowed, true)));
+        }
 
         return Inertia::render('Vendas/Index', [
             'vendas' => $vendas,

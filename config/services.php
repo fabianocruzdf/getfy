@@ -52,4 +52,14 @@ return [
         'base_url' => rtrim(env('CAJUPAY_API_BASE_URL', 'https://api.cajupay.com.br'), '/'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Pagar.me API v5 (core): mesma URL para teste e produção; o ambiente é
+    | definido pelo tipo de chave (sk_test_ / sk_).
+    |--------------------------------------------------------------------------
+    */
+    'pagarme' => [
+        'base_url' => rtrim(env('PAGARME_API_BASE_URL', 'https://api.pagar.me/core/v5'), '/'),
+    ],
+
 ];

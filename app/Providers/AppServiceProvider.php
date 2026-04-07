@@ -9,6 +9,7 @@ use App\Listeners\SendAccessEmailOnOrderCompleted;
 use App\Listeners\SendPanelPushOnBoletoGenerated;
 use App\Listeners\SendPanelPushOnOrderCompleted;
 use App\Listeners\SendPanelPushOnPixGenerated;
+use App\Listeners\CademiEventSubscriber;
 use App\Listeners\SpedyEventSubscriber;
 use App\Listeners\UtmifyEventSubscriber;
 use App\Listeners\SendApiApplicationWebhookListener;
@@ -64,6 +65,7 @@ class AppServiceProvider extends ServiceProvider
         Event::subscribe(SendApiApplicationWebhookListener::class);
         Event::subscribe(UtmifyEventSubscriber::class);
         Event::subscribe(SpedyEventSubscriber::class);
+        Event::subscribe(CademiEventSubscriber::class);
 
         ResetPassword::toMailUsing(function (object $notifiable, string $token) {
             $params = [

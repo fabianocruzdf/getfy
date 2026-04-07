@@ -36,7 +36,7 @@ import {
                         CajuPay
                     </span>
                     <span class="mt-0.5 block text-zinc-300">
-                        Liquidação <strong class="text-white">D+0</strong> no mesmo dia útil — fluxo de caixa alinhado ao PIX.
+                        Liquidação <strong class="text-white">D+0</strong> no mesmo dia — fluxo de caixa alinhado ao PIX.
                     </span>
                 </TooltipContent>
             </TooltipPortal>

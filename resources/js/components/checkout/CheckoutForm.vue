@@ -7,6 +7,14 @@ import CheckoutDropdown from './CheckoutDropdown.vue';
 import CheckoutOrderBumps from './CheckoutOrderBumps.vue';
 import CheckoutPaymentMethods from './CheckoutPaymentMethods.vue';
 import AsaasCard from './gateways/asaas/Card.vue';
+import {
+    CHECKOUT_PAGARME_TOKENIZE_FORM_ID,
+    PAGARME_TOKENIZE_FORM_ACTION,
+    loadPagarmeTokenizeScript,
+    ensurePagarmeCheckoutInit,
+    requestPagarmeTokenFromForm,
+    resetPagarmeTokenizeScriptState,
+} from '@/composables/usePagarmeTokenizecard.js';
 
 const STORAGE_KEY = 'checkout_draft';
 
@@ -65,6 +73,12 @@ function getCsrfToken() {
         } catch (_) {}
     }
     return '';
+}
+
+function tf(key, fallback = '') {
+    const v = typeof t === 'function' ? t(key) : null;
+    if (!v || v === key) return fallback;
+    return v;
 }
 
 const EMAIL_PROVIDERS = [
@@ -145,6 +159,28 @@ const isCardGatewayStripe = computed(() => cardGatewaySlug.value === 'stripe');
 const isCardGatewayEfi = computed(() => cardGatewaySlug.value === 'efi');
 const isCardGatewayMercadopago = computed(() => cardGatewaySlug.value === 'mercadopago');
 const isCardGatewayAsaas = computed(() => cardGatewaySlug.value === 'asaas');
+const isCardGatewayPagarme = computed(() => cardGatewaySlug.value === 'pagarme');
+const cardPagarmePublicKey = computed(() => {
+    const k = props.cardGatewayKeys?.pagarme;
+    return (k && typeof k.public_key === 'string' ? k.public_key : '').trim();
+});
+/** Base da API v5 para POST /tokens (alinhada a config/services.pagarme.base_url no backend). */
+const cardPagarmeApiBaseUrl = computed(() => {
+    const k = props.cardGatewayKeys?.pagarme;
+    const u = k && typeof k.api_base_url === 'string' ? k.api_base_url.trim() : '';
+    return u !== '' ? u.replace(/\/$/, '') : 'https://api.pagar.me/core/v5';
+});
+const showBillingAddressBlock = computed(
+    () => form.payment_method === 'boleto' || (form.payment_method === 'card' && isCardGatewayPagarme.value)
+);
+
+const pagarmeTokenizeFormId = CHECKOUT_PAGARME_TOKENIZE_FORM_ID;
+
+watch(cardPagarmePublicKey, (next, prev) => {
+    if (prev && next !== prev) {
+        resetPagarmeTokenizeScriptState();
+    }
+});
 
 const countryCodes = [
     { code: '55', country: 'BR', label: 'Brasil', flag: '🇧🇷' },
@@ -404,7 +440,8 @@ watch(
 watch(
     () => Object.keys(form.errors || {}).length,
     (count) => {
-        if (count > 0 && (form.payment_method === 'pix' || form.payment_method === 'pix_auto' || form.payment_method === 'boleto')) {
+        if (count > 0 && (form.payment_method === 'pix' || form.payment_method === 'pix_auto' || form.payment_method === 'boleto'
+            || (form.payment_method === 'card' && isCardGatewayPagarme.value))) {
             showEditForm.value = true;
         }
     }
@@ -481,12 +518,14 @@ async function fetchAddressByCep() {
 
         if (!res.ok) {
             addressCepError.value = 'Não foi possível buscar o CEP. Verifique o número e tente novamente.';
+            boletoManualAddress.value = true;
             return;
         }
 
         const data = await res.json().catch(() => null);
         if (!data || data.erro) {
             addressCepError.value = 'CEP não encontrado. Verifique e tente novamente.';
+            boletoManualAddress.value = true;
             return;
         }
 
@@ -496,6 +535,7 @@ async function fetchAddressByCep() {
         if (data.uf) form.address_state = data.uf;
     } catch (_) {
         addressCepError.value = 'Não foi possível buscar o CEP agora. Tente novamente.';
+        boletoManualAddress.value = true;
     } finally {
         addressCepLoading.value = false;
     }
@@ -545,6 +585,50 @@ function getCardBrandFromNumber(digits) {
     return null;
 }
 
+/** PAN completo para token Pagar.me (13–19 dígitos; Amex 15). */
+function pagarmePanLengthComplete(digits) {
+    const d = String(digits || '');
+    if (d.length < 13) return false;
+    if ((d.startsWith('34') || d.startsWith('37')) && d.length === 15) return true;
+    if (d.length === 16) return true;
+    if (d.length === 19) return true;
+
+    return false;
+}
+
+/** Pagar.me: titular sem números nem símbolos (só letras e espaços). */
+function sanitizePagarmeHolderName(raw) {
+    const s = String(raw || '')
+        .normalize('NFD')
+        .replace(/\p{M}/gu, '')
+        .replace(/[^a-zA-Z\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    return s.length >= 2 ? s : 'Cliente';
+}
+
+function formatCheckoutCardError(err) {
+    const d = err?.response?.data;
+    if (d && typeof d === 'object') {
+        if (typeof d.message === 'string' && d.message.trim() !== '') {
+            return d.message;
+        }
+        if (d.errors && typeof d.errors === 'object') {
+            for (const key of Object.keys(d.errors)) {
+                const arr = d.errors[key];
+                if (Array.isArray(arr) && arr[0]) {
+                    return String(arr[0]);
+                }
+            }
+        }
+    }
+    if (err?.message && typeof err.message === 'string') {
+        return err.message;
+    }
+    return 'Não foi possível processar o cartão. Tente novamente.';
+}
+
 // Dados de cartão: apenas refs locais, NUNCA em draft/localStorage
 const cardHolderName = ref('');
 const cardNumberDisplay = ref('');
@@ -586,7 +670,14 @@ const cardBrandImage = computed(() => {
     return brand ? `/images/gateways/cards/${brand.slug}.svg` : '/images/gateways/card.png';
 });
 
-const cardNumberComplete = computed(() => cardNumberDigits.value.length === 16);
+const cardNumberComplete = computed(() => {
+    const d = cardNumberDigits.value;
+    if (isCardGatewayPagarme.value) {
+        return pagarmePanLengthComplete(d);
+    }
+
+    return d.length === 16;
+});
 const cardNumberMasked = computed(() => {
     const d = cardNumberDigits.value;
     if (d.length < 4) return '';
@@ -594,12 +685,14 @@ const cardNumberMasked = computed(() => {
 });
 
 function onCardNumberInput(e) {
-    const v = (e.target.value || '').replace(/\D/g, '').slice(0, 16);
+    const maxPan = isCardGatewayPagarme.value ? 19 : 16;
+    const v = (e.target.value || '').replace(/\D/g, '').slice(0, maxPan);
     cardNumberDigits.value = v;
     const parts = [];
     for (let i = 0; i < v.length; i += 4) parts.push(v.slice(i, i + 4));
     cardNumberDisplay.value = parts.join(' ');
-    if (v.length === 16) {
+    const panComplete = isCardGatewayPagarme.value ? pagarmePanLengthComplete(v) : v.length === 16;
+    if (panComplete) {
         showFullCardNumber.value = false;
         nextTick(() => {
             if (cardExpMonthInput.value) cardExpMonthInput.value.focus();
@@ -613,7 +706,12 @@ function reopenCardNumberEdit() {
     });
 }
 function onCardNumberBlur() {
-    if (cardNumberDigits.value.length === 16) showFullCardNumber.value = false;
+    const d = cardNumberDigits.value;
+    if (isCardGatewayPagarme.value) {
+        if (pagarmePanLengthComplete(d)) showFullCardNumber.value = false;
+    } else if (d.length === 16) {
+        showFullCardNumber.value = false;
+    }
 }
 function onCardExpInput(e, part) {
     const v = (e.target.value || '').replace(/\D/g, '');
@@ -639,7 +737,8 @@ function onCardExpInput(e, part) {
     }
 }
 function onCardCvvInput(e) {
-    cardCvv.value = (e.target.value || '').replace(/\D/g, '').slice(0, 3);
+    const max = cardGatewaySlug.value === 'pagarme' ? 4 : 3;
+    cardCvv.value = (e.target.value || '').replace(/\D/g, '').slice(0, max);
 }
 
 // Limpar erro de cartão ao trocar método ou editar campos
@@ -979,6 +1078,90 @@ async function getStripePaymentMethod() {
     return { payment_token: paymentMethod.id, card_mask: paymentMethod.card?.last4 ? `****${paymentMethod.card.last4}` : '' };
 }
 
+/** Fallback: POST /tokens na API v5 (mesmo domínio deve estar liberado). */
+async function getPagarmePaymentTokenViaApi() {
+    const pk = cardPagarmePublicKey.value;
+    if (!pk) {
+        throw new Error('Public Key da Pagar.me não configurada.');
+    }
+    const base = cardPagarmeApiBaseUrl.value;
+    const url = `${base}/tokens?appId=${encodeURIComponent(pk)}`;
+    const monthNum = parseInt(String(cardExpMonth.value || '').replace(/\D/g, '').slice(0, 2), 10);
+    if (!Number.isFinite(monthNum) || monthNum < 1 || monthNum > 12) {
+        throw new Error('Mês de validade inválido.');
+    }
+    const expYearRaw = String(cardExpYear.value || '').replace(/\D/g, '');
+    let expYearNum;
+    if (expYearRaw.length === 4) {
+        expYearNum = parseInt(expYearRaw, 10);
+    } else if (expYearRaw.length === 2) {
+        expYearNum = parseInt(expYearRaw, 10);
+    } else {
+        throw new Error('Ano de validade inválido. Informe AA ou AAAA.');
+    }
+    if (!Number.isFinite(expYearNum)) {
+        throw new Error('Ano de validade inválido.');
+    }
+    const holderName = sanitizePagarmeHolderName((cardHolderName.value || form.name || '').trim());
+    const cardPayload = {
+        number: cardNumberDigits.value,
+        holder_name: holderName,
+        exp_month: monthNum,
+        exp_year: expYearNum,
+        cvv: String(cardCvv.value || ''),
+    };
+    const body = {
+        type: 'card',
+        card: cardPayload,
+    };
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(body),
+    });
+    let data = {};
+    try {
+        data = await res.json();
+    } catch {
+        data = {};
+    }
+    if (!res.ok) {
+        const msg = data?.message || (Array.isArray(data?.errors) && data.errors[0]?.message) || 'Não foi possível tokenizar o cartão.';
+        throw new Error(typeof msg === 'string' ? msg : 'Não foi possível tokenizar o cartão.');
+    }
+    const id = data?.id;
+    if (!id || typeof id !== 'string') {
+        throw new Error('Resposta inválida da Pagar.me.');
+    }
+    const installments = Math.min(props.cardMaxInstallments || 1, Math.max(1, selectedInstallments.value));
+    const last4 = data?.card?.last_four_digits || cardNumberDigits.value.slice(-4);
+    return {
+        payment_token: JSON.stringify({ card_token: id, installments }),
+        card_mask: last4 ? `****${last4}` : '',
+    };
+}
+
+async function getPagarmePaymentToken() {
+    const pk = cardPagarmePublicKey.value;
+    if (!pk) {
+        throw new Error('Public Key da Pagar.me não configurada.');
+    }
+    await nextTick();
+    try {
+        await loadPagarmeTokenizeScript(pk);
+        ensurePagarmeCheckoutInit();
+        const { token } = await requestPagarmeTokenFromForm(pagarmeTokenizeFormId);
+        const installments = Math.min(props.cardMaxInstallments || 1, Math.max(1, selectedInstallments.value));
+        const last4 = cardNumberDigits.value.length >= 4 ? cardNumberDigits.value.slice(-4) : '';
+        return {
+            payment_token: JSON.stringify({ card_token: token, installments }),
+            card_mask: last4 ? `****${last4}` : '',
+        };
+    } catch {
+        return getPagarmePaymentTokenViaApi();
+    }
+}
+
 async function getEfiPaymentToken() {
     const EfiPay = (await import('payment-token-efi')).default;
     const env = props.cardEfiSandbox ? 'sandbox' : 'production';
@@ -1092,8 +1275,8 @@ function submit() {
                     }
                 })
                 .catch((err) => {
-                    const msg = err?.response?.data?.message || err?.message || 'Não foi possível processar o pagamento.';
-                    cardFormError.value = typeof msg === 'string' ? msg : 'Não foi possível processar o pagamento.';
+                    const msg = formatCheckoutCardError(err);
+                    cardFormError.value = msg;
                     showCardRefusedModal.value = true;
                     cardRefusedMessage.value = cardFormError.value;
                 })
@@ -1113,6 +1296,30 @@ function submit() {
                 cardFormError.value = 'Aguarde o formulário do cartão carregar.';
                 return;
             }
+        } else if (isCardGatewayPagarme.value) {
+            if (!cardPagarmePublicKey.value) {
+                cardFormError.value = props.t('checkout.card_not_configured') || 'Pagamento por cartão não está configurado.';
+                return;
+            }
+            const nameOk = (cardHolderName.value || form.name || '').trim().length >= 3;
+            const numberOk = cardNumberDigits.value.length >= 13 && cardNumberDigits.value.length <= 19;
+            const expOk = cardExpMonth.value.length === 2 && parseInt(cardExpMonth.value, 10) >= 1 && parseInt(cardExpMonth.value, 10) <= 12
+                && (cardExpYear.value.length === 2 || cardExpYear.value.length === 4);
+            const cvvOk = cardCvv.value.length >= 3 && cardCvv.value.length <= 4;
+            if (!nameOk || !numberOk || !expOk || !cvvOk) {
+                cardFormError.value = props.t('checkout.card_fill_all') || 'Preencha todos os dados do cartão corretamente.';
+                return;
+            }
+            const zipOk = (form.address_zipcode || '').replace(/\D/g, '').length >= 8;
+            const streetOk = (form.address_street || '').trim().length >= 2;
+            const numOk = (form.address_number || '').trim().length >= 1;
+            const neighOk = (form.address_neighborhood || '').trim().length >= 2;
+            const cityOk = (form.address_city || '').trim().length >= 2;
+            const stateOk = (form.address_state || '').trim().length === 2;
+            if (!zipOk || !streetOk || !numOk || !neighOk || !cityOk || !stateOk) {
+                cardFormError.value = 'Preencha o endereço de cobrança completo (CEP, rua, número, bairro, cidade e UF).';
+                return;
+            }
         } else {
             if (!props.cardPayeeCode || !props.cardPayeeCode.trim()) {
                 cardFormError.value = props.t('checkout.card_not_configured') || 'Pagamento por cartão não está configurado.';
@@ -1130,7 +1337,11 @@ function submit() {
         }
         cardTokenizing.value = true;
         cardFormError.value = '';
-        const getTokenPromise = isCardGatewayStripe.value ? getStripePaymentMethod() : getEfiPaymentToken();
+        const getTokenPromise = isCardGatewayStripe.value
+            ? getStripePaymentMethod()
+            : isCardGatewayPagarme.value
+                ? getPagarmePaymentToken()
+                : getEfiPaymentToken();
         getTokenPromise
             .then(({ payment_token, card_mask }) => {
                 const payload = {
@@ -1145,6 +1356,14 @@ function submit() {
                     card_mask: card_mask || undefined,
                     installments: Math.min(props.cardMaxInstallments || 1, Math.max(1, selectedInstallments.value)),
                 };
+                if (isCardGatewayPagarme.value) {
+                    payload.address_zipcode = (form.address_zipcode || '').replace(/\D/g, '').slice(0, 8);
+                    payload.address_street = (form.address_street || '').trim();
+                    payload.address_number = (form.address_number || '').trim();
+                    payload.address_neighborhood = (form.address_neighborhood || '').trim();
+                    payload.address_city = (form.address_city || '').trim();
+                    payload.address_state = (form.address_state || '').trim().slice(0, 2).toUpperCase();
+                }
                 if (props.productOfferId) payload.product_offer_id = props.productOfferId;
                 if (props.subscriptionPlanId) payload.subscription_plan_id = props.subscriptionPlanId;
                 if (props.checkoutSessionToken) payload.checkout_session_token = props.checkoutSessionToken;
@@ -1194,6 +1413,20 @@ function submit() {
                         cardTokenizing.value = false;
                         return;
                     }
+                    if (data.order_id) {
+                        const fallback = `/checkout/obrigado?order_id=${encodeURIComponent(String(data.order_id))}&next=login`;
+                        cardApproved.value = true;
+                        cardApprovedRedirectUrl.value = fallback;
+                        setTimeout(() => router.visit(fallback), 800);
+                        return;
+                    }
+                    const pendingMsg = typeof data.message === 'string' && data.message.trim() !== ''
+                        ? data.message
+                        : 'Pagamento em processamento. Verifique seu e-mail.';
+                    cardRefusedMessage.value = pendingMsg;
+                    showCardRefusedModal.value = true;
+                    cardTokenizing.value = false;
+                    return;
                 }
                 if (res.request?.responseURL && res.request.responseURL !== window.location.href && typeof data === 'string') {
                     const finalUrl = res.request.responseURL;
@@ -1206,8 +1439,15 @@ function submit() {
                 cardTokenizing.value = false;
             })
             .catch((err) => {
-                const msg = err?.response?.data?.message || err?.message || 'Não foi possível processar o cartão. Tente novamente.';
-                cardRefusedMessage.value = typeof msg === 'string' ? msg : 'Não foi possível processar o cartão. Tente novamente.';
+                let msg = formatCheckoutCardError(err);
+                if (isCardGatewayPagarme.value && typeof msg === 'string') {
+                    if (/verification failed|cart[aã]o verific/i.test(msg)) {
+                        msg += '\n\nO cartão 4000000000000028 simula recusa na Pagar.me (comportamento esperado). Para sucesso use 4000000000000010; após qualquer erro, recarregue a página para gerar um novo token.';
+                    } else if (/n[uú]mero do cart[aã]o|cart[aã]o inv[aá]lido|invalid card/i.test(msg)) {
+                        msg += '\n\nEm BRL, CPF é obrigatório. Use 4000000000000010 sem espaços, validade futura, CVV 123, pk_test_/sk_test_ da mesma conta e domínio liberado. Se já tentou antes, recarregue o checkout (token de uso único). Confira captura de cartão e modo teste no painel Pagar.me.';
+                    }
+                }
+                cardRefusedMessage.value = msg;
                 showCardRefusedModal.value = true;
             })
             .finally(() => {
@@ -1576,95 +1816,6 @@ function submit() {
             />
             <p v-if="form.errors.payment_method" class="text-sm font-medium text-red-600">{{ form.errors.payment_method }}</p>
 
-            <!-- Endereço para boleto (Mercado Pago exige): primeiro CEP, depois só número -->
-            <div v-if="form.payment_method === 'boleto'" class="space-y-4 rounded-xl border-2 border-gray-100 bg-gray-50/50 p-4">
-                <div class="flex items-center gap-2 text-gray-700">
-                    <MapPin class="h-5 w-5 shrink-0 text-gray-500" aria-hidden="true" />
-                    <span class="text-sm font-medium">{{ t('checkout.endereco_boleto') }}</span>
-                </div>
-                <!-- 1) Só CEP + Buscar -->
-                <div v-if="!boletoAddressFetched" class="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-2">
-                    <div class="min-w-0 flex-1">
-                        <label for="checkout-address-cep" class="mb-2 block text-sm font-medium text-gray-700">{{ t('checkout.endereco_boleto_cep') }}</label>
-                        <div class="relative">
-                            <span class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">
-                                <MapPin class="h-5 w-5" aria-hidden="true" />
-                            </span>
-                            <input
-                                id="checkout-address-cep"
-                                :value="form.address_zipcode"
-                                type="text"
-                                inputmode="numeric"
-                                maxlength="9"
-                                :class="inputClassWithIcon"
-                                placeholder="00000-000"
-                                @input="onAddressCepInput"
-                                @blur="fetchAddressByCep"
-                            />
-                        </div>
-                        <p v-if="form.errors.address_zipcode" class="mt-1.5 text-sm font-medium text-red-600">{{ form.errors.address_zipcode }}</p>
-                        <p v-else-if="addressCepError" class="mt-1.5 text-sm font-medium text-red-600">{{ addressCepError }}</p>
-                    </div>
-                    <button
-                        type="button"
-                        :disabled="addressCepLoading || (form.address_zipcode || '').replace(/\D/g, '').length < 8"
-                        class="shrink-0 self-start rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50 sm:h-[3.25rem] sm:self-end"
-                        @click="fetchAddressByCep"
-                    >
-                        <Loader2 v-if="addressCepLoading" class="h-5 w-5 animate-spin" />
-                        <span v-else>{{ t('checkout.endereco_boleto_buscar') }}</span>
-                    </button>
-                </div>
-                <div v-if="!boletoAddressFetched" class="pt-1">
-                    <button
-                        type="button"
-                        class="text-xs font-medium text-gray-600 underline decoration-gray-300 underline-offset-2 hover:text-gray-800"
-                        @click="boletoManualAddress = !boletoManualAddress"
-                    >
-                        {{ boletoManualAddress ? 'Ocultar preenchimento manual' : 'Preencher endereço manualmente' }}
-                    </button>
-                </div>
-
-                <div v-if="!boletoAddressFetched && boletoManualAddress" class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div class="sm:col-span-2">
-                        <label class="mb-2 block text-sm font-medium text-gray-700">Rua</label>
-                        <input v-model="form.address_street" type="text" :class="inputClass" placeholder="Rua" />
-                    </div>
-                    <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700">Bairro</label>
-                        <input v-model="form.address_neighborhood" type="text" :class="inputClass" placeholder="Bairro" />
-                    </div>
-                    <div>
-                        <label class="mb-2 block text-sm font-medium text-gray-700">Cidade</label>
-                        <input v-model="form.address_city" type="text" :class="inputClass" placeholder="Cidade" />
-                    </div>
-                    <div class="max-w-[12rem]">
-                        <label class="mb-2 block text-sm font-medium text-gray-700">UF</label>
-                        <input v-model="form.address_state" type="text" maxlength="2" :class="inputClass" placeholder="UF" />
-                    </div>
-                </div>
-                <!-- 2) Após buscar: endereço em texto + só campo Número -->
-                <template v-else>
-                    <p class="text-xs font-medium text-gray-500">
-                        {{ [form.address_street, form.address_neighborhood, [form.address_city, form.address_state].filter(Boolean).join(' - ')].filter(Boolean).join(', ') }}
-                    </p>
-                    <div class="max-w-[12rem]">
-                        <label for="checkout-address-number" class="mb-2 block text-sm font-medium text-gray-700">{{ t('checkout.endereco_boleto_numero') }}</label>
-                        <input
-                            id="checkout-address-number"
-                            v-model="form.address_number"
-                            type="text"
-                            :class="inputClassWithIcon"
-                            placeholder="Nº"
-                        />
-                        <p v-if="form.errors.address_number" class="mt-1.5 text-sm font-medium text-red-600">{{ form.errors.address_number }}</p>
-                    </div>
-                    <p v-if="form.errors.address_street || form.errors.address_neighborhood || form.errors.address_city || form.errors.address_state" class="text-sm font-medium text-red-600">
-                        {{ form.errors.address_street || form.errors.address_neighborhood || form.errors.address_city || form.errors.address_state }}
-                    </p>
-                </template>
-            </div>
-
             <!-- Formulário de cartão (Stripe Elements ou campos Efí) -->
             <div v-if="form.payment_method === 'card'" class="space-y-4 rounded-xl border-2 border-gray-100 bg-gray-50/50 p-4">
                 <div class="flex items-center gap-2 text-gray-700">
@@ -1727,6 +1878,130 @@ function submit() {
                     </div>
                     <div ref="stripeCardRef" class="rounded-xl border-2 border-gray-100 bg-white px-4 py-3 min-h-[3.25rem]" />
                 </template>
+                <!-- Pagar.me: mesmo layout do cartão Efí (validade + CVV na barra ao lado do PAN mascarado); form="" + tokenizecard -->
+                <div v-else-if="isCardGatewayPagarme" class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <p v-if="!cardPagarmePublicKey" class="sm:col-span-2 rounded-xl border-2 border-amber-200 bg-amber-50/80 px-4 py-3 text-sm font-medium text-amber-800">
+                        Configure a Public Key (pk_...) da Pagar.me nas credenciais do gateway.
+                    </p>
+                    <template v-else>
+                        <div class="relative sm:col-span-2">
+                            <label for="card-holder-pagarme" class="mb-2 block text-sm font-medium text-gray-700">{{ t('checkout.card_holder') || 'Nome no cartão' }}</label>
+                            <div class="relative">
+                                <span class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">
+                                    <User class="h-5 w-5" aria-hidden="true" />
+                                </span>
+                                <input
+                                    id="card-holder-pagarme"
+                                    v-model="cardHolderName"
+                                    type="text"
+                                    autocomplete="cc-name"
+                                    :form="pagarmeTokenizeFormId"
+                                    data-pagarmecheckout-element="holder_name"
+                                    name="pagarme_holder_name"
+                                    :class="inputClassWithIcon"
+                                    :placeholder="t('checkout.card_holder_placeholder') || 'Como está impresso no cartão'"
+                                />
+                            </div>
+                        </div>
+                        <div class="relative sm:col-span-2">
+                            <label for="card-number-pagarme" class="mb-2 block text-sm font-medium text-gray-700">{{ t('checkout.card_number') || 'Número do cartão' }}</label>
+                            <div class="flex flex-nowrap items-stretch overflow-hidden rounded-xl border-2 border-gray-100 bg-gray-50/80 transition focus-within:border-gray-200 focus-within:bg-white focus-within:ring-2 focus-within:ring-offset-0">
+                                <span class="pointer-events-none flex h-full min-h-[3.25rem] w-10 shrink-0 items-center justify-center text-gray-400">
+                                    <img
+                                        :src="cardBrandImage"
+                                        alt=""
+                                        class="block h-5 w-5 flex-shrink-0 object-contain self-center"
+                                        aria-hidden="true"
+                                        @error="(e) => { const el = e.target; if (!el.src || !el.src.endsWith('card.png')) { el.onerror = null; el.src = '/images/gateways/card.png'; } }"
+                                    />
+                                </span>
+                                <template v-if="!cardNumberComplete || showFullCardNumber">
+                                    <input
+                                        id="card-number-pagarme"
+                                        ref="cardNumberInput"
+                                        :value="cardNumberDisplay"
+                                        type="text"
+                                        inputmode="numeric"
+                                        autocomplete="cc-number"
+                                        maxlength="23"
+                                        class="min-w-0 flex-1 border-0 bg-transparent py-3.5 pr-4 pl-2 text-sm font-medium text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0"
+                                        :placeholder="t('checkout.card_number_placeholder') || '0000 0000 0000 0000'"
+                                        @input="onCardNumberInput"
+                                        @blur="onCardNumberBlur"
+                                    />
+                                </template>
+                                <template v-else>
+                                    <button
+                                        type="button"
+                                        class="min-w-0 flex-1 cursor-pointer py-3.5 pl-2 text-left text-sm font-medium tabular-nums text-gray-700 hover:text-gray-900 focus:outline-none focus:ring-0"
+                                        :title="t('checkout.click_to_edit') || 'Clique para editar o número'"
+                                        @click="reopenCardNumberEdit"
+                                    >
+                                        {{ cardNumberMasked }}
+                                    </button>
+                                    <div class="flex shrink-0 items-center gap-1.5 pr-3">
+                                        <input
+                                            id="card-exp-month-pagarme"
+                                            ref="cardExpMonthInput"
+                                            type="text"
+                                            inputmode="numeric"
+                                            :form="pagarmeTokenizeFormId"
+                                            data-pagarmecheckout-element="exp_month"
+                                            name="pagarme_exp_month"
+                                            class="w-9 border-0 bg-transparent py-3.5 px-0 text-center text-sm font-medium text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0"
+                                            placeholder="MM"
+                                            maxlength="2"
+                                            :value="cardExpMonth"
+                                            @input="(e) => onCardExpInput(e, 'month')"
+                                        />
+                                        <span class="text-gray-300 text-sm">/</span>
+                                        <input
+                                            id="card-exp-year-pagarme"
+                                            ref="cardExpYearInput"
+                                            type="text"
+                                            inputmode="numeric"
+                                            :form="pagarmeTokenizeFormId"
+                                            data-pagarmecheckout-element="exp_year"
+                                            name="pagarme_exp_year"
+                                            class="w-9 border-0 bg-transparent py-3.5 px-0 text-center text-sm font-medium text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0"
+                                            placeholder="AA"
+                                            maxlength="4"
+                                            :value="cardExpYear"
+                                            @input="(e) => onCardExpInput(e, 'year')"
+                                        />
+                                        <input
+                                            id="card-cvv-pagarme"
+                                            ref="cardCvvInput"
+                                            :value="cardCvv"
+                                            type="text"
+                                            inputmode="numeric"
+                                            autocomplete="cc-csc"
+                                            maxlength="4"
+                                            :form="pagarmeTokenizeFormId"
+                                            data-pagarmecheckout-element="cvv"
+                                            name="pagarme_cvv"
+                                            class="w-11 border-0 bg-transparent py-3.5 px-0 text-center text-sm font-medium text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0"
+                                            placeholder="CVV"
+                                            @input="onCardCvvInput"
+                                        />
+                                    </div>
+                                </template>
+                            </div>
+                            <input
+                                type="text"
+                                readonly
+                                tabindex="-1"
+                                autocomplete="off"
+                                :value="cardNumberDigits"
+                                :form="pagarmeTokenizeFormId"
+                                data-pagarmecheckout-element="number"
+                                name="pagarme_number"
+                                class="absolute left-0 top-full h-px w-px overflow-hidden border-0 p-0 opacity-0"
+                                aria-hidden="true"
+                            />
+                        </div>
+                    </template>
+                </div>
                 <!-- Efí: campos manuais para tokenização payment-token-efi -->
                 <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div class="relative sm:col-span-2">
@@ -1845,6 +2120,111 @@ function submit() {
                 </div>
             </div>
 
+            <!-- Endereço para boleto ou cartão Pagar.me (billing address na API) -->
+            <div v-if="showBillingAddressBlock" class="space-y-4 rounded-xl border-2 border-gray-100 bg-gray-50/50 p-4">
+                <div class="flex items-center gap-2 text-gray-700">
+                    <MapPin class="h-5 w-5 shrink-0 text-gray-500" aria-hidden="true" />
+                    <span class="text-sm font-medium">
+                        {{ form.payment_method === 'card'
+                            ? tf('checkout.endereco_cobranca', 'Endereço de cobrança')
+                            : tf('checkout.endereco_boleto', 'Endereço') }}
+                    </span>
+                </div>
+                <!-- 1) Só CEP + Buscar -->
+                <div v-if="!boletoAddressFetched" class="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-2">
+                    <div class="min-w-0 flex-1">
+                        <label for="checkout-address-cep" class="mb-2 block text-sm font-medium text-gray-700">
+                            {{ form.payment_method === 'card' ? 'CEP' : t('checkout.endereco_boleto_cep') }}
+                        </label>
+                        <div class="relative">
+                            <span class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">
+                                <MapPin class="h-5 w-5" aria-hidden="true" />
+                            </span>
+                            <input
+                                id="checkout-address-cep"
+                                :value="form.address_zipcode"
+                                type="text"
+                                inputmode="numeric"
+                                maxlength="9"
+                                :class="inputClassWithIcon"
+                                placeholder="00000-000"
+                                @input="onAddressCepInput"
+                                @blur="fetchAddressByCep"
+                            />
+                        </div>
+                        <p v-if="form.errors.address_zipcode" class="mt-1.5 text-sm font-medium text-red-600">{{ form.errors.address_zipcode }}</p>
+                        <p v-else-if="addressCepError" class="mt-1.5 text-sm font-medium text-red-600">{{ addressCepError }}</p>
+                    </div>
+                    <button
+                        type="button"
+                        :disabled="addressCepLoading || (form.address_zipcode || '').replace(/\\D/g, '').length < 8"
+                        class="shrink-0 self-start rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50 sm:h-[3.25rem] sm:self-end"
+                        @click="fetchAddressByCep"
+                    >
+                        <Loader2 v-if="addressCepLoading" class="h-5 w-5 animate-spin" />
+                        <span v-else>{{ t('checkout.endereco_boleto_buscar') }}</span>
+                    </button>
+                </div>
+                <div v-if="!boletoAddressFetched" class="pt-1">
+                    <button
+                        type="button"
+                        class="text-xs font-medium text-gray-600 underline decoration-gray-300 underline-offset-2 hover:text-gray-800"
+                        @click="boletoManualAddress = !boletoManualAddress"
+                    >
+                        {{ boletoManualAddress ? 'Ocultar preenchimento manual' : 'Preencher endereço manualmente' }}
+                    </button>
+                </div>
+
+                <!-- fallback manual quando CEP falhar -->
+                <div v-if="!boletoAddressFetched && boletoManualAddress" class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label class="mb-2 block text-sm font-medium text-gray-700">Rua</label>
+                        <input v-model="form.address_street" type="text" :class="inputClass" placeholder="Rua" />
+                    </div>
+                    <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700">Número</label>
+                        <input v-model="form.address_number" type="text" :class="inputClass" placeholder="Nº" />
+                        <p v-if="form.errors.address_number" class="mt-1.5 text-sm font-medium text-red-600">{{ form.errors.address_number }}</p>
+                    </div>
+                    <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700">Bairro</label>
+                        <input v-model="form.address_neighborhood" type="text" :class="inputClass" placeholder="Bairro" />
+                    </div>
+                    <div>
+                        <label class="mb-2 block text-sm font-medium text-gray-700">Cidade</label>
+                        <input v-model="form.address_city" type="text" :class="inputClass" placeholder="Cidade" />
+                    </div>
+                    <div class="max-w-[12rem]">
+                        <label class="mb-2 block text-sm font-medium text-gray-700">UF</label>
+                        <input v-model="form.address_state" type="text" maxlength="2" :class="inputClass" placeholder="UF" />
+                    </div>
+                    <p v-if="form.errors.address_street || form.errors.address_neighborhood || form.errors.address_city || form.errors.address_state" class="sm:col-span-2 text-sm font-medium text-red-600">
+                        {{ form.errors.address_street || form.errors.address_neighborhood || form.errors.address_city || form.errors.address_state }}
+                    </p>
+                </div>
+
+                <!-- 2) Após buscar: endereço em texto + campo Número -->
+                <template v-else>
+                    <p class="text-xs font-medium text-gray-500">
+                        {{ [form.address_street, form.address_neighborhood, [form.address_city, form.address_state].filter(Boolean).join(' - ')].filter(Boolean).join(', ') }}
+                    </p>
+                    <div class="max-w-[12rem]">
+                        <label for="checkout-address-number" class="mb-2 block text-sm font-medium text-gray-700">{{ t('checkout.endereco_boleto_numero') }}</label>
+                        <input
+                            id="checkout-address-number"
+                            v-model="form.address_number"
+                            type="text"
+                            :class="inputClassWithIcon"
+                            placeholder="Nº"
+                        />
+                        <p v-if="form.errors.address_number" class="mt-1.5 text-sm font-medium text-red-600">{{ form.errors.address_number }}</p>
+                    </div>
+                    <p v-if="form.errors.address_street || form.errors.address_neighborhood || form.errors.address_city || form.errors.address_state" class="text-sm font-medium text-red-600">
+                        {{ form.errors.address_street || form.errors.address_neighborhood || form.errors.address_city || form.errors.address_state }}
+                    </p>
+                </template>
+            </div>
+
             <p v-if="form.errors.product_id" class="text-sm font-medium text-red-600">{{ form.errors.product_id }}</p>
             <button
                 v-if="form.payment_method !== 'card' || !isCardGatewayMercadopago"
@@ -1861,6 +2241,20 @@ function submit() {
                 <ShoppingBag v-else class="h-5 w-5" />
                 {{ cardApproved ? 'Aprovado!' : (form.processing || cardTokenizing) ? t('checkout.processing') : (form.payment_method === 'pix' ? t('checkout.gerar_pix') : form.payment_method === 'pix_auto' ? (t('checkout.gerar_pix_auto') || 'Gerar PIX (renovação automática)') : form.payment_method === 'card' ? (isCardGatewayAsaas && asaasCardStep === 1 ? 'Continuar' : (t('checkout.pagar_cartao') || 'Pagar com cartão')) : form.payment_method === 'boleto' ? (t('checkout.gerar_boleto') || 'Gerar boleto') : t('checkout.submit_button')) }}
             </button>
+        </form>
+        <!-- Form vazio: tokenizecard.js; campos cartão Pagar.me associam-se via atributo HTML form="" -->
+        <form
+            v-if="isCardGatewayPagarme && cardPagarmePublicKey"
+            :id="pagarmeTokenizeFormId"
+            method="post"
+            :action="PAGARME_TOKENIZE_FORM_ACTION"
+            data-pagarmecheckout-form
+            class="sr-only"
+            aria-hidden="true"
+            @submit.prevent
+        >
+            <input type="hidden" name="_token" :value="getCsrfToken()" />
+            <span data-pagarmecheckout-element="brand" class="hidden" aria-hidden="true" />
         </form>
         <footer class="mt-8 hidden border-t border-gray-100 pt-6 sm:block">
             <div v-if="showFooterCustom" class="mb-6 text-center">
@@ -1924,7 +2318,7 @@ function submit() {
                             <AlertCircle class="h-8 w-8 text-red-600" />
                         </div>
                         <h2 id="refused-title" class="mt-4 text-lg font-semibold text-gray-900">Pagamento recusado</h2>
-                        <p class="mt-2 text-sm text-gray-600">{{ cardRefusedMessage }}</p>
+                        <p class="mt-2 whitespace-pre-line text-sm text-gray-600">{{ cardRefusedMessage }}</p>
                         <div class="mt-6 flex flex-col gap-3 sm:flex-row-reverse">
                             <button
                                 type="button"

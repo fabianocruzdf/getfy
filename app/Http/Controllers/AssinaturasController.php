@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Subscription;
+use App\Services\TeamAccessService;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -15,11 +16,20 @@ class AssinaturasController extends Controller
             ->forTenant($tenantId)
             ->active();
 
+        if (auth()->user()?->isTeam()) {
+            $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
+            $query->whereIn('product_id', $allowed ?: ['__none__']);
+        }
+
         $ativas = (clone $query)->count();
         $clientes = (clone $query)->distinct('user_id')->count('user_id');
         $mrrQuery = Subscription::forTenant($tenantId)->active()
             ->join('subscription_plans', 'subscriptions.subscription_plan_id', '=', 'subscription_plans.id')
             ->where('subscription_plans.interval', '!=', 'lifetime');
+        if (auth()->user()?->isTeam()) {
+            $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
+            $mrrQuery->whereIn('subscriptions.product_id', $allowed ?: ['__none__']);
+        }
         $mrr = round((float) $mrrQuery->sum('subscription_plans.price'), 2);
 
         $assinaturas = $query->orderByDesc('subscriptions.current_period_end')

@@ -39,6 +39,8 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
         $middleware->alias([
             'role' => \App\Http\Middleware\EnsureRole::class,
+            'team.permission' => \App\Http\Middleware\EnsureTeamPermission::class,
+            'audit.log' => \App\Http\Middleware\AuditLogMiddleware::class,
             'guest' => \App\Http\Middleware\EnsureGuest::class,
             'api.application' => \App\Http\Middleware\AuthenticateApiApplication::class,
             'member.area.resolve' => \App\Http\Middleware\ResolveMemberAreaProduct::class,

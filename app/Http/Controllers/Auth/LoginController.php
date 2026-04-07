@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Models\TeamAuditLog;
 use App\Services\MemberAreaResolver;
 use App\Support\DockerSetupState;
 use Illuminate\Http\RedirectResponse;
@@ -69,6 +70,19 @@ class LoginController extends Controller
         if (Auth::attempt($credentials, (bool) $request->boolean('remember'))) {
             $request->session()->regenerate();
             $user = Auth::user();
+            if ($user && $user->tenant_id && $user->canAccessPanel()) {
+                TeamAuditLog::create([
+                    'tenant_id' => $user->tenant_id,
+                    'actor_user_id' => $user->id,
+                    'action' => 'auth.login',
+                    'metadata' => [
+                        'method' => 'POST',
+                        'path' => '/login',
+                    ],
+                    'ip' => $request->ip(),
+                    'user_agent' => (string) $request->userAgent(),
+                ]);
+            }
             if ($user->canAccessPanel()) {
                 return redirect()->intended('/dashboard');
             }
@@ -83,6 +97,20 @@ class LoginController extends Controller
 
     public function logout(Request $request)
     {
+        $user = Auth::user();
+        if ($user && $user->tenant_id && $user->canAccessPanel()) {
+            TeamAuditLog::create([
+                'tenant_id' => $user->tenant_id,
+                'actor_user_id' => $user->id,
+                'action' => 'auth.logout',
+                'metadata' => [
+                    'method' => 'POST',
+                    'path' => '/logout',
+                ],
+                'ip' => $request->ip(),
+                'user_agent' => (string) $request->userAgent(),
+            ]);
+        }
         Auth::logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();

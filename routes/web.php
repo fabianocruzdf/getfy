@@ -90,6 +90,7 @@ Route::middleware('throttle:60,1')->group(function () {
     Route::post('/webhooks/gateways/mercadopago', [\App\Http\Controllers\Webhooks\MercadoPagoWebhookController::class, 'handle'])->name('webhooks.mercadopago');
     Route::post('/webhooks/gateways/pushinpay', [\App\Http\Controllers\Webhooks\PushinPayWebhookController::class, 'handle'])->name('webhooks.pushinpay');
     Route::post('/webhooks/gateways/asaas', [\App\Http\Controllers\Webhooks\AsaasWebhookController::class, 'handle'])->name('webhooks.asaas');
+    Route::post('/webhooks/gateways/pagarme', [\App\Http\Controllers\Webhooks\PagarmeWebhookController::class, 'handle'])->name('webhooks.pagarme');
     // Dispatcher genérico para gateways de plugins (webhook_handler na definição do gateway)
     Route::post('/webhooks/gateways/{slug}', \App\Http\Controllers\Webhooks\GenericGatewayWebhookController::class)
         ->where('slug', '[a-z0-9_-]+')
@@ -115,6 +116,10 @@ Route::get('/checkout/pix', [\App\Http\Controllers\CheckoutController::class, 'p
 Route::get('/checkout/boleto', [\App\Http\Controllers\CheckoutController::class, 'boletoPage'])->name('checkout.boleto');
 Route::get('/checkout/order-status', [\App\Http\Controllers\CheckoutController::class, 'orderStatus'])->name('checkout.order-status')->middleware('throttle:30,1');
 Route::post('/checkout', [\App\Http\Controllers\CheckoutController::class, 'process'])->name('checkout.process')->middleware('throttle:10,1');
+// Pagar.me tokenizecard: se o submit HTML não for cancelado, evita POST na rota GET /c/{slug} (405).
+Route::post('/checkout/pagarme-tokenize-sink', fn () => response()->noContent())
+    ->name('checkout.pagarme-tokenize-sink')
+    ->middleware('throttle:120,1');
 Route::post('/api/checkout/track', [\App\Http\Controllers\CheckoutTrackingController::class, 'track'])->name('checkout.track')->middleware('throttle:60,1');
 Route::post('/checkout/validate-coupon', [\App\Http\Controllers\CheckoutController::class, 'validateCoupon'])->name('checkout.validate-coupon')->middleware('throttle:30,1');
 
@@ -154,7 +159,24 @@ Route::middleware(['auth', 'role:admin'])->prefix('usuarios')->name('usuarios.')
     Route::delete('/{user}', [\App\Http\Controllers\UsersController::class, 'destroy'])->name('destroy');
 });
 
-Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor'])->group(function () {
+// Equipe: cargos e membros (admin e infoprodutor; equipe apenas se tiver permissão)
+Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'team.permission:equipe.manage'])
+    ->prefix('usuarios/equipe')
+    ->group(function () {
+        Route::get('/', [\App\Http\Controllers\EquipeController::class, 'index'])->name('usuarios.equipe');
+
+        Route::post('/cargos', [\App\Http\Controllers\EquipeController::class, 'storeRole'])->name('usuarios.equipe.cargos.store');
+        Route::put('/cargos/{role}', [\App\Http\Controllers\EquipeController::class, 'updateRole'])->name('usuarios.equipe.cargos.update');
+        Route::delete('/cargos/{role}', [\App\Http\Controllers\EquipeController::class, 'destroyRole'])->name('usuarios.equipe.cargos.destroy');
+
+        Route::post('/membros', [\App\Http\Controllers\EquipeController::class, 'storeMember'])->name('usuarios.equipe.membros.store');
+        Route::put('/membros/{member}', [\App\Http\Controllers\EquipeController::class, 'updateMember'])->name('usuarios.equipe.membros.update');
+        Route::delete('/membros/{member}', [\App\Http\Controllers\EquipeController::class, 'destroyMember'])->name('usuarios.equipe.membros.destroy');
+
+        Route::post('/logs/clear', [\App\Http\Controllers\EquipeController::class, 'clearLogs'])->name('usuarios.equipe.logs.clear');
+    });
+
+Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audit.log'])->group(function () {
     Route::post('/painel/push-subscribe', [\App\Http\Controllers\PanelPwaController::class, 'pushSubscribe'])->name('panel.pwa.push-subscribe')->middleware('throttle:10,1');
     Route::get('/painel/notifications', [\App\Http\Controllers\PanelNotificationsController::class, 'index'])->name('panel.notifications.index');
     Route::patch('/painel/notifications/{notification}/read', [\App\Http\Controllers\PanelNotificationsController::class, 'markRead'])->name('panel.notifications.mark-read');
@@ -228,154 +250,195 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor'])->group(fu
     Route::put('/meu-perfil/username', [\App\Http\Controllers\ProfileController::class, 'updateUsername'])->name('profile.update-username');
     Route::put('/meu-perfil/senha', [\App\Http\Controllers\ProfileController::class, 'updatePassword'])->name('profile.update-password');
 
-    Route::get('/dashboard', [\App\Http\Controllers\DashboardController::class, '__invoke'])->name('dashboard');
-    Route::get('/vendas', [\App\Http\Controllers\VendasController::class, 'index'])->name('vendas.index');
-    Route::get('/vendas/export', [\App\Http\Controllers\VendasController::class, 'export'])->name('vendas.export');
-    Route::post('/vendas/{order}/resend-access-email', [\App\Http\Controllers\VendasController::class, 'resendAccessEmail'])->name('vendas.resend-access-email');
-    Route::post('/vendas/{order}/approve-manually', [\App\Http\Controllers\VendasController::class, 'approveManually'])->name('vendas.approve-manually');
-    Route::get('/produtos', [\App\Http\Controllers\ProdutosController::class, 'index'])->name('produtos.index');
-    Route::get('/produtos/create', [\App\Http\Controllers\ProdutosController::class, 'create'])->name('produtos.create');
-    Route::post('/produtos', [\App\Http\Controllers\ProdutosController::class, 'store'])->name('produtos.store');
-    Route::get('/produtos/{produto}/edit', [\App\Http\Controllers\ProdutosController::class, 'edit'])->name('produtos.edit');
-    Route::get('/produtos/{produto}/checkout/edit', [\App\Http\Controllers\CheckoutConfigController::class, 'edit'])->name('checkout.builder');
-    Route::post('/produtos/{produto}/checkout/ensure-slug', [\App\Http\Controllers\ProdutosController::class, 'ensureCheckoutSlug'])->name('produtos.checkout.ensure-slug');
-    Route::delete('/produtos/{produto}/checkout/remove-slug', [\App\Http\Controllers\ProdutosController::class, 'removeCheckoutSlug'])->name('produtos.checkout.remove-slug');
-    Route::put('/produtos/{produto}/checkout-config', [\App\Http\Controllers\CheckoutConfigController::class, 'update'])->name('checkout.config.update');
-    Route::post('/produtos/{produto}/checkout-upload', [\App\Http\Controllers\CheckoutConfigController::class, 'uploadImage'])->name('checkout.upload');
-    Route::get('/produtos/{produto}/upsell-page/edit', [\App\Http\Controllers\UpsellDownsellPageController::class, 'editUpsellPage'])->name('upsell-page.edit');
-    Route::put('/produtos/{produto}/upsell-page/config', [\App\Http\Controllers\UpsellDownsellPageController::class, 'updateUpsellPage'])->name('upsell-page.update');
-    Route::post('/produtos/{produto}/upsell-page/config', [\App\Http\Controllers\UpsellDownsellPageController::class, 'updateUpsellPage'])->name('upsell-page.update.post');
-    Route::get('/produtos/{produto}/downsell-page/edit', [\App\Http\Controllers\UpsellDownsellPageController::class, 'editDownsellPage'])->name('downsell-page.edit');
-    Route::put('/produtos/{produto}/downsell-page/config', [\App\Http\Controllers\UpsellDownsellPageController::class, 'updateDownsellPage'])->name('downsell-page.update');
-    Route::post('/produtos/{produto}/downsell-page/config', [\App\Http\Controllers\UpsellDownsellPageController::class, 'updateDownsellPage'])->name('downsell-page.update.post');
-    Route::put('/produtos/{produto}', [\App\Http\Controllers\ProdutosController::class, 'update'])->name('produtos.update');
-    Route::post('/produtos/{produto}/email-template-logo', [\App\Http\Controllers\ProdutosController::class, 'uploadEmailTemplateLogo'])->name('produtos.email-template-logo');
-    Route::delete('/produtos/{produto}', [\App\Http\Controllers\ProdutosController::class, 'destroy'])->name('produtos.destroy');
-    Route::post('/produtos/{produto}/duplicate', [\App\Http\Controllers\ProdutosController::class, 'duplicate'])->name('produtos.duplicate');
-    Route::post('/produtos/{produto}/alunos', [\App\Http\Controllers\ProdutosController::class, 'addAluno'])->name('produtos.alunos.add');
-    Route::post('/produtos/{produto}/offers', [\App\Http\Controllers\ProdutosController::class, 'storeOffer'])->name('produtos.offers.store');
-    Route::put('/produtos/{produto}/offers/{offer}', [\App\Http\Controllers\ProdutosController::class, 'updateOffer'])->name('produtos.offers.update');
-    Route::delete('/produtos/{produto}/offers/{offer}', [\App\Http\Controllers\ProdutosController::class, 'destroyOffer'])->name('produtos.offers.destroy');
-    Route::post('/produtos/{produto}/order-bumps', [\App\Http\Controllers\ProdutosController::class, 'storeOrderBump'])->name('produtos.order-bumps.store');
-    Route::put('/produtos/{produto}/order-bumps/{bump}', [\App\Http\Controllers\ProdutosController::class, 'updateOrderBump'])->name('produtos.order-bumps.update');
-    Route::delete('/produtos/{produto}/order-bumps/{bump}', [\App\Http\Controllers\ProdutosController::class, 'destroyOrderBump'])->name('produtos.order-bumps.destroy');
-    Route::post('/produtos/{produto}/subscription-plans', [\App\Http\Controllers\ProdutosController::class, 'storeSubscriptionPlan'])->name('produtos.subscription-plans.store');
-    Route::put('/produtos/{produto}/subscription-plans/{plan}', [\App\Http\Controllers\ProdutosController::class, 'updateSubscriptionPlan'])->name('produtos.subscription-plans.update');
-    Route::delete('/produtos/{produto}/subscription-plans/{plan}', [\App\Http\Controllers\ProdutosController::class, 'destroySubscriptionPlan'])->name('produtos.subscription-plans.destroy');
-    Route::get('/vendas/assinaturas', [\App\Http\Controllers\AssinaturasController::class, 'index'])->name('assinaturas.index');
-    Route::get('/produtos/cupons', [\App\Http\Controllers\CuponsController::class, 'index'])->name('cupons.index');
-    Route::post('/produtos/cupons', [\App\Http\Controllers\CuponsController::class, 'store'])->name('cupons.store');
-    Route::put('/produtos/cupons/{coupon}', [\App\Http\Controllers\CuponsController::class, 'update'])->name('cupons.update');
-    Route::delete('/produtos/cupons/{coupon}', [\App\Http\Controllers\CuponsController::class, 'destroy'])->name('cupons.destroy');
-    Route::get('/produtos/alunos', [\App\Http\Controllers\AlunosController::class, 'index'])->name('alunos.index');
-    Route::get('/produtos/alunos/{aluno}', [\App\Http\Controllers\AlunosController::class, 'show'])->name('alunos.show')->where('aluno', '[0-9]+');
-    Route::post('/produtos/alunos', [\App\Http\Controllers\AlunosController::class, 'store'])->name('alunos.store');
-    Route::get('/produtos/alunos/import-example', [\App\Http\Controllers\AlunosController::class, 'downloadImportExample'])->name('alunos.import-example');
-    Route::post('/produtos/alunos/import', [\App\Http\Controllers\AlunosController::class, 'import'])->name('alunos.import');
-    Route::put('/produtos/alunos/{aluno}', [\App\Http\Controllers\AlunosController::class, 'update'])->name('alunos.update')->where('aluno', '[0-9]+');
-    Route::delete('/produtos/alunos/{aluno}', [\App\Http\Controllers\AlunosController::class, 'destroy'])->name('alunos.destroy')->where('aluno', '[0-9]+');
-    Route::delete('/produtos/alunos/{aluno}/produtos/{produto}', [\App\Http\Controllers\AlunosController::class, 'removeProduct'])->name('alunos.remove-product')->where('aluno', '[0-9]+');
-    Route::get('/relatorios', [\App\Http\Controllers\RelatoriosController::class, 'index'])->name('relatorios.index');
-    Route::get('/configuracoes', [\App\Http\Controllers\SettingsController::class, 'index'])->name('settings.index');
-    Route::put('/configuracoes', [\App\Http\Controllers\SettingsController::class, 'update'])->name('settings.update');
-    Route::post('/configuracoes/email/test', [\App\Http\Controllers\EmailTestController::class, 'test'])->name('settings.email.test');
-    Route::post('/configuracoes/email/connection-test', [\App\Http\Controllers\EmailTestController::class, 'connectionTest'])->name('settings.email.connection-test');
-    Route::post('/configuracoes/email/send-test', [\App\Http\Controllers\EmailTestController::class, 'sendTest'])->name('settings.email.send-test');
-    Route::post('/configuracoes/storage/test', [\App\Http\Controllers\StorageTestController::class, '__invoke'])->name('settings.storage.test');
-    Route::post('/configuracoes/storage/migrate', [\App\Http\Controllers\StorageMigrateController::class, '__invoke'])->name('settings.storage.migrate');
-    Route::get('/configuracoes/update/check', [\App\Http\Controllers\UpdateController::class, 'check'])->name('settings.update.check');
-    Route::get('/configuracoes/update/integrity', [\App\Http\Controllers\UpdateController::class, 'integrity'])->name('settings.update.integrity');
-    Route::post('/configuracoes/update/migrate', [\App\Http\Controllers\UpdateController::class, 'migrateNow'])->name('settings.update.migrate')->middleware('throttle:10,1');
-    Route::post('/configuracoes/update/run', [\App\Http\Controllers\UpdateController::class, 'run'])->name('settings.update.run')->middleware('throttle:10,1');
-    Route::get('/configuracoes/gateways/{slug}', [\App\Http\Controllers\GatewaysController::class, 'show'])->name('gateways.show');
-    Route::put('/configuracoes/gateways/{slug}', [\App\Http\Controllers\GatewaysController::class, 'update'])->name('gateways.update');
-    Route::post('/configuracoes/gateways/{slug}/test', [\App\Http\Controllers\GatewaysController::class, 'test'])->name('gateways.test');
+    Route::get('/dashboard', [\App\Http\Controllers\DashboardController::class, '__invoke'])
+        ->middleware('team.permission:dashboard.view')
+        ->name('dashboard');
+
+    Route::middleware('team.permission:vendas.view')->group(function () {
+        Route::get('/vendas', [\App\Http\Controllers\VendasController::class, 'index'])->name('vendas.index');
+        Route::get('/vendas/export', [\App\Http\Controllers\VendasController::class, 'export'])->name('vendas.export');
+        Route::post('/vendas/{order}/resend-access-email', [\App\Http\Controllers\VendasController::class, 'resendAccessEmail'])->name('vendas.resend-access-email');
+        Route::post('/vendas/{order}/approve-manually', [\App\Http\Controllers\VendasController::class, 'approveManually'])->name('vendas.approve-manually');
+    });
+
+    Route::middleware('team.permission:produtos.view')->group(function () {
+        Route::get('/produtos', [\App\Http\Controllers\ProdutosController::class, 'index'])->name('produtos.index');
+        Route::get('/produtos/create', [\App\Http\Controllers\ProdutosController::class, 'create'])->name('produtos.create');
+        Route::post('/produtos', [\App\Http\Controllers\ProdutosController::class, 'store'])->name('produtos.store');
+        Route::get('/produtos/{produto}/edit', [\App\Http\Controllers\ProdutosController::class, 'edit'])->name('produtos.edit');
+        Route::get('/produtos/{produto}/checkout/edit', [\App\Http\Controllers\CheckoutConfigController::class, 'edit'])->name('checkout.builder');
+        Route::post('/produtos/{produto}/checkout/ensure-slug', [\App\Http\Controllers\ProdutosController::class, 'ensureCheckoutSlug'])->name('produtos.checkout.ensure-slug');
+        Route::delete('/produtos/{produto}/checkout/remove-slug', [\App\Http\Controllers\ProdutosController::class, 'removeCheckoutSlug'])->name('produtos.checkout.remove-slug');
+        Route::put('/produtos/{produto}/checkout-config', [\App\Http\Controllers\CheckoutConfigController::class, 'update'])->name('checkout.config.update');
+        Route::post('/produtos/{produto}/checkout-upload', [\App\Http\Controllers\CheckoutConfigController::class, 'uploadImage'])->name('checkout.upload');
+    });
+    Route::middleware('team.permission:produtos.view')->group(function () {
+        Route::get('/produtos/{produto}/upsell-page/edit', [\App\Http\Controllers\UpsellDownsellPageController::class, 'editUpsellPage'])->name('upsell-page.edit');
+        Route::put('/produtos/{produto}/upsell-page/config', [\App\Http\Controllers\UpsellDownsellPageController::class, 'updateUpsellPage'])->name('upsell-page.update');
+        Route::post('/produtos/{produto}/upsell-page/config', [\App\Http\Controllers\UpsellDownsellPageController::class, 'updateUpsellPage'])->name('upsell-page.update.post');
+        Route::get('/produtos/{produto}/downsell-page/edit', [\App\Http\Controllers\UpsellDownsellPageController::class, 'editDownsellPage'])->name('downsell-page.edit');
+        Route::put('/produtos/{produto}/downsell-page/config', [\App\Http\Controllers\UpsellDownsellPageController::class, 'updateDownsellPage'])->name('downsell-page.update');
+        Route::post('/produtos/{produto}/downsell-page/config', [\App\Http\Controllers\UpsellDownsellPageController::class, 'updateDownsellPage'])->name('downsell-page.update.post');
+        Route::put('/produtos/{produto}', [\App\Http\Controllers\ProdutosController::class, 'update'])->name('produtos.update');
+        Route::post('/produtos/{produto}/email-template-logo', [\App\Http\Controllers\ProdutosController::class, 'uploadEmailTemplateLogo'])->name('produtos.email-template-logo');
+        Route::delete('/produtos/{produto}', [\App\Http\Controllers\ProdutosController::class, 'destroy'])->name('produtos.destroy');
+        Route::post('/produtos/{produto}/duplicate', [\App\Http\Controllers\ProdutosController::class, 'duplicate'])->name('produtos.duplicate');
+        Route::post('/produtos/{produto}/alunos', [\App\Http\Controllers\ProdutosController::class, 'addAluno'])->name('produtos.alunos.add');
+        Route::post('/produtos/{produto}/offers', [\App\Http\Controllers\ProdutosController::class, 'storeOffer'])->name('produtos.offers.store');
+        Route::put('/produtos/{produto}/offers/{offer}', [\App\Http\Controllers\ProdutosController::class, 'updateOffer'])->name('produtos.offers.update');
+        Route::delete('/produtos/{produto}/offers/{offer}', [\App\Http\Controllers\ProdutosController::class, 'destroyOffer'])->name('produtos.offers.destroy');
+        Route::post('/produtos/{produto}/order-bumps', [\App\Http\Controllers\ProdutosController::class, 'storeOrderBump'])->name('produtos.order-bumps.store');
+        Route::put('/produtos/{produto}/order-bumps/{bump}', [\App\Http\Controllers\ProdutosController::class, 'updateOrderBump'])->name('produtos.order-bumps.update');
+        Route::delete('/produtos/{produto}/order-bumps/{bump}', [\App\Http\Controllers\ProdutosController::class, 'destroyOrderBump'])->name('produtos.order-bumps.destroy');
+        Route::post('/produtos/{produto}/subscription-plans', [\App\Http\Controllers\ProdutosController::class, 'storeSubscriptionPlan'])->name('produtos.subscription-plans.store');
+        Route::put('/produtos/{produto}/subscription-plans/{plan}', [\App\Http\Controllers\ProdutosController::class, 'updateSubscriptionPlan'])->name('produtos.subscription-plans.update');
+        Route::delete('/produtos/{produto}/subscription-plans/{plan}', [\App\Http\Controllers\ProdutosController::class, 'destroySubscriptionPlan'])->name('produtos.subscription-plans.destroy');
+        Route::put('/produtos/{produto}/external-member-area', [\App\Http\Controllers\ProdutosController::class, 'updateExternalMemberArea'])->name('produtos.external-member-area.update');
+        Route::get('/produtos/cupons', [\App\Http\Controllers\CuponsController::class, 'index'])->name('cupons.index');
+        Route::post('/produtos/cupons', [\App\Http\Controllers\CuponsController::class, 'store'])->name('cupons.store');
+        Route::put('/produtos/cupons/{coupon}', [\App\Http\Controllers\CuponsController::class, 'update'])->name('cupons.update');
+        Route::delete('/produtos/cupons/{coupon}', [\App\Http\Controllers\CuponsController::class, 'destroy'])->name('cupons.destroy');
+        Route::get('/produtos/alunos', [\App\Http\Controllers\AlunosController::class, 'index'])->name('alunos.index');
+        Route::get('/produtos/alunos/{aluno}', [\App\Http\Controllers\AlunosController::class, 'show'])->name('alunos.show')->where('aluno', '[0-9]+');
+        Route::post('/produtos/alunos', [\App\Http\Controllers\AlunosController::class, 'store'])->name('alunos.store');
+        Route::get('/produtos/alunos/import-example', [\App\Http\Controllers\AlunosController::class, 'downloadImportExample'])->name('alunos.import-example');
+        Route::post('/produtos/alunos/import', [\App\Http\Controllers\AlunosController::class, 'import'])->name('alunos.import');
+        Route::put('/produtos/alunos/{aluno}', [\App\Http\Controllers\AlunosController::class, 'update'])->name('alunos.update')->where('aluno', '[0-9]+');
+        Route::delete('/produtos/alunos/{aluno}', [\App\Http\Controllers\AlunosController::class, 'destroy'])->name('alunos.destroy')->where('aluno', '[0-9]+');
+        Route::delete('/produtos/alunos/{aluno}/produtos/{produto}', [\App\Http\Controllers\AlunosController::class, 'removeProduct'])->name('alunos.remove-product')->where('aluno', '[0-9]+');
+
+        // Member Builder (área de membros do produto)
+        Route::get('/produtos/{produto}/member-builder', [\App\Http\Controllers\MemberBuilderController::class, 'index'])->name('member-builder.index');
+        Route::put('/produtos/{produto}/member-builder/config', [\App\Http\Controllers\MemberBuilderController::class, 'updateConfig'])->name('member-builder.config.update');
+        // POST aceito para config: frontend envia JSON e em muitos ambientes _method não é aplicado a body JSON
+        Route::post('/produtos/{produto}/member-builder/config', [\App\Http\Controllers\MemberBuilderController::class, 'updateConfig'])->name('member-builder.config.update.post');
+        Route::post('/produtos/{produto}/member-builder/upload', [\App\Http\Controllers\MemberBuilderController::class, 'uploadImage'])->name('member-builder.upload');
+        Route::post('/produtos/{produto}/member-builder/upload-pdf', [\App\Http\Controllers\MemberBuilderController::class, 'uploadPdf'])->name('member-builder.upload-pdf');
+        Route::post('/produtos/{produto}/member-builder/upload-badge', [\App\Http\Controllers\MemberBuilderController::class, 'uploadBadge'])->name('member-builder.upload-badge');
+        Route::post('/produtos/{produto}/member-builder/sections', [\App\Http\Controllers\MemberBuilderController::class, 'storeSection'])->name('member-builder.sections.store');
+        Route::put('/produtos/{produto}/member-builder/sections/{section}', [\App\Http\Controllers\MemberBuilderController::class, 'updateSection'])->name('member-builder.sections.update');
+        Route::delete('/produtos/{produto}/member-builder/sections/{section}', [\App\Http\Controllers\MemberBuilderController::class, 'destroySection'])->name('member-builder.sections.destroy');
+        Route::post('/produtos/{produto}/member-builder/sections/{section}/modules', [\App\Http\Controllers\MemberBuilderController::class, 'storeModule'])->name('member-builder.modules.store');
+        Route::put('/produtos/{produto}/member-builder/modules/{module}', [\App\Http\Controllers\MemberBuilderController::class, 'updateModule'])->name('member-builder.modules.update');
+        Route::delete('/produtos/{produto}/member-builder/modules/{module}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyModule'])->name('member-builder.modules.destroy');
+        Route::post('/produtos/{produto}/member-builder/modules/{module}/lessons', [\App\Http\Controllers\MemberBuilderController::class, 'storeLesson'])->name('member-builder.lessons.store');
+        Route::put('/produtos/{produto}/member-builder/lessons/{lesson}', [\App\Http\Controllers\MemberBuilderController::class, 'updateLesson'])->name('member-builder.lessons.update');
+        Route::delete('/produtos/{produto}/member-builder/lessons/{lesson}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyLesson'])->name('member-builder.lessons.destroy');
+        Route::post('/produtos/{produto}/member-builder/internal-products', [\App\Http\Controllers\MemberBuilderController::class, 'storeInternalProduct'])->name('member-builder.internal-products.store');
+        Route::delete('/produtos/{produto}/member-builder/internal-products/{internalProduct}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyInternalProduct'])->name('member-builder.internal-products.destroy');
+        Route::post('/produtos/{produto}/member-builder/turmas', [\App\Http\Controllers\MemberBuilderController::class, 'storeTurma'])->name('member-builder.turmas.store');
+        Route::put('/produtos/{produto}/member-builder/turmas/{turma}', [\App\Http\Controllers\MemberBuilderController::class, 'updateTurma'])->name('member-builder.turmas.update');
+        Route::delete('/produtos/{produto}/member-builder/turmas/{turma}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyTurma'])->name('member-builder.turmas.destroy');
+        Route::post('/produtos/{produto}/member-builder/turmas/{turma}/users', [\App\Http\Controllers\MemberBuilderController::class, 'attachTurmaUser'])->name('member-builder.turmas.users.attach');
+        Route::delete('/produtos/{produto}/member-builder/turmas/{turma}/users/{user}', [\App\Http\Controllers\MemberBuilderController::class, 'detachTurmaUser'])->name('member-builder.turmas.users.detach');
+        Route::post('/produtos/{produto}/member-builder/alunos', [\App\Http\Controllers\MemberBuilderController::class, 'storeNewAluno'])->name('member-builder.alunos.store');
+        Route::get('/produtos/{produto}/member-builder/comments', [\App\Http\Controllers\MemberBuilderController::class, 'commentsIndex'])->name('member-builder.comments.index');
+        Route::put('/produtos/{produto}/member-builder/comments/{comment}', [\App\Http\Controllers\MemberBuilderController::class, 'updateComment'])->name('member-builder.comments.update');
+        Route::post('/produtos/{produto}/member-builder/community-pages', [\App\Http\Controllers\MemberBuilderController::class, 'storeCommunityPage'])->name('member-builder.community-pages.store');
+        Route::put('/produtos/{produto}/member-builder/community-pages/{page}', [\App\Http\Controllers\MemberBuilderController::class, 'updateCommunityPage'])->name('member-builder.community-pages.update');
+        Route::delete('/produtos/{produto}/member-builder/community-pages/{page}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyCommunityPage'])->name('member-builder.community-pages.destroy');
+        Route::post('/produtos/{produto}/member-builder/send-push', [\App\Http\Controllers\MemberBuilderController::class, 'sendPushNotification'])->name('member-builder.send-push');
+    });
+
+    Route::get('/vendas/assinaturas', [\App\Http\Controllers\AssinaturasController::class, 'index'])
+        ->middleware('team.permission:vendas.view')
+        ->name('assinaturas.index');
+    Route::get('/relatorios', [\App\Http\Controllers\RelatoriosController::class, 'index'])
+        ->middleware('team.permission:relatorios.view')
+        ->name('relatorios.index');
+
+    Route::middleware('team.permission:configuracoes.view')->group(function () {
+        Route::get('/configuracoes', [\App\Http\Controllers\SettingsController::class, 'index'])->name('settings.index');
+        Route::put('/configuracoes', [\App\Http\Controllers\SettingsController::class, 'update'])->name('settings.update');
+        Route::post('/configuracoes/email/test', [\App\Http\Controllers\EmailTestController::class, 'test'])->name('settings.email.test');
+        Route::post('/configuracoes/email/connection-test', [\App\Http\Controllers\EmailTestController::class, 'connectionTest'])->name('settings.email.connection-test');
+        Route::post('/configuracoes/email/send-test', [\App\Http\Controllers\EmailTestController::class, 'sendTest'])->name('settings.email.send-test');
+        Route::post('/configuracoes/storage/test', [\App\Http\Controllers\StorageTestController::class, '__invoke'])->name('settings.storage.test');
+        Route::post('/configuracoes/storage/migrate', [\App\Http\Controllers\StorageMigrateController::class, '__invoke'])->name('settings.storage.migrate');
+        Route::get('/configuracoes/update/check', [\App\Http\Controllers\UpdateController::class, 'check'])->name('settings.update.check');
+        Route::get('/configuracoes/update/integrity', [\App\Http\Controllers\UpdateController::class, 'integrity'])->name('settings.update.integrity');
+        Route::post('/configuracoes/update/migrate', [\App\Http\Controllers\UpdateController::class, 'migrateNow'])->name('settings.update.migrate')->middleware('throttle:10,1');
+        Route::post('/configuracoes/update/run', [\App\Http\Controllers\UpdateController::class, 'run'])->name('settings.update.run')->middleware('throttle:10,1');
+        Route::get('/configuracoes/gateways/{slug}', [\App\Http\Controllers\GatewaysController::class, 'show'])->name('gateways.show');
+        Route::put('/configuracoes/gateways/{slug}', [\App\Http\Controllers\GatewaysController::class, 'update'])->name('gateways.update');
+        Route::post('/configuracoes/gateways/{slug}/test', [\App\Http\Controllers\GatewaysController::class, 'test'])->name('gateways.test');
+    });
     // Upload de arquivo (PHP/Laravel lida melhor via POST)
-    Route::post('/configuracoes/gateways/{slug}/certificate', [\App\Http\Controllers\GatewaysController::class, 'updateCertificate'])->name('gateways.certificate');
+    Route::post('/configuracoes/gateways/{slug}/certificate', [\App\Http\Controllers\GatewaysController::class, 'updateCertificate'])
+        ->middleware('team.permission:configuracoes.view')
+        ->name('gateways.certificate');
     // Compat: mantem PUT caso algum cliente antigo use
-    Route::put('/configuracoes/gateways/{slug}/certificate', [\App\Http\Controllers\GatewaysController::class, 'updateCertificate']);
-    Route::put('/configuracoes/gateways/order', [\App\Http\Controllers\GatewaysController::class, 'updateOrder'])->name('gateways.order');
-    Route::get('/gerenciar-plugins', [\App\Http\Controllers\PluginsController::class, 'index'])->name('plugins.index');
-    Route::get('/gerenciar-plugins/store-plugins-list', [\App\Http\Controllers\PluginsController::class, 'storePluginsList'])->name('plugins.store.list');
-    Route::get('/gerenciar-plugins/store-plugin/{slug}', [\App\Http\Controllers\PluginStoreController::class, 'show'])->name('plugins.store.show')->where('slug', '[a-z0-9\-]+');
-    Route::post('/gerenciar-plugins/install/{slug}', [\App\Http\Controllers\PluginInstallController::class, '__invoke'])->name('plugins.install')->where('slug', '[a-z0-9\-]+')->middleware('throttle:10,1');
-    Route::post('/gerenciar-plugins/install-from-zip', [\App\Http\Controllers\PluginInstallController::class, 'installFromZip'])->name('plugins.install.from-zip')->middleware('throttle:10,1');
-    Route::post('/gerenciar-plugins/register-plugin/{slug}', [\App\Http\Controllers\PluginsController::class, 'registerPlugin'])->name('plugins.register')->where('slug', '[a-z0-9\-_]+')->middleware('throttle:10,1');
-    Route::get('/integracoes', [\App\Http\Controllers\IntegrationsController::class, 'index'])->name('integrations.index');
+    Route::put('/configuracoes/gateways/{slug}/certificate', [\App\Http\Controllers\GatewaysController::class, 'updateCertificate'])
+        ->middleware('team.permission:configuracoes.view');
+    Route::put('/configuracoes/gateways/order', [\App\Http\Controllers\GatewaysController::class, 'updateOrder'])
+        ->middleware('team.permission:configuracoes.view')
+        ->name('gateways.order');
+    Route::middleware('role:admin|infoprodutor')->group(function () {
+        Route::get('/gerenciar-plugins', [\App\Http\Controllers\PluginsController::class, 'index'])->name('plugins.index');
+        Route::get('/gerenciar-plugins/store-plugins-list', [\App\Http\Controllers\PluginsController::class, 'storePluginsList'])->name('plugins.store.list');
+        Route::get('/gerenciar-plugins/store-plugin/{slug}', [\App\Http\Controllers\PluginStoreController::class, 'show'])->name('plugins.store.show')->where('slug', '[a-z0-9\-]+');
+        Route::post('/gerenciar-plugins/install/{slug}', [\App\Http\Controllers\PluginInstallController::class, '__invoke'])->name('plugins.install')->where('slug', '[a-z0-9\-]+')->middleware('throttle:10,1');
+        Route::post('/gerenciar-plugins/install-from-zip', [\App\Http\Controllers\PluginInstallController::class, 'installFromZip'])->name('plugins.install.from-zip')->middleware('throttle:10,1');
+        Route::post('/gerenciar-plugins/register-plugin/{slug}', [\App\Http\Controllers\PluginsController::class, 'registerPlugin'])->name('plugins.register')->where('slug', '[a-z0-9\-_]+')->middleware('throttle:10,1');
+    });
+
+    Route::get('/integracoes', [\App\Http\Controllers\IntegrationsController::class, 'index'])
+        ->middleware('team.permission:integracoes.view')
+        ->name('integrations.index');
 
     // API de pagamentos – aplicações
-    Route::get('/aplicacoes-api', [\App\Http\Controllers\ApiApplicationsController::class, 'index'])->name('api-applications.index');
-    Route::get('/aplicacoes-api/create', [\App\Http\Controllers\ApiApplicationsController::class, 'create'])->name('api-applications.create');
-    Route::post('/aplicacoes-api', [\App\Http\Controllers\ApiApplicationsController::class, 'store'])->name('api-applications.store');
-    Route::get('/aplicacoes-api/{apiApplication}/edit', [\App\Http\Controllers\ApiApplicationsController::class, 'edit'])->name('api-applications.edit');
-    Route::put('/aplicacoes-api/{apiApplication}', [\App\Http\Controllers\ApiApplicationsController::class, 'update'])->name('api-applications.update');
-    Route::delete('/aplicacoes-api/{apiApplication}', [\App\Http\Controllers\ApiApplicationsController::class, 'destroy'])->name('api-applications.destroy');
-    Route::post('/aplicacoes-api/{apiApplication}/regenerate-key', [\App\Http\Controllers\ApiApplicationsController::class, 'regenerateKey'])->name('api-applications.regenerate-key');
-    Route::post('/aplicacoes-api/{apiApplication}/logo', [\App\Http\Controllers\ApiApplicationsController::class, 'uploadLogo'])->name('api-applications.logo.upload');
-    Route::delete('/aplicacoes-api/{apiApplication}/logo', [\App\Http\Controllers\ApiApplicationsController::class, 'removeLogo'])->name('api-applications.logo.remove');
-    Route::get('/docs/api-pagamentos', [\App\Http\Controllers\ApiDocsController::class, '__invoke'])->name('api-docs.pagamentos');
-    Route::get('/docs/api-pagamentos/testar', [\App\Http\Controllers\ApiDocsController::class, 'testar'])->name('api-docs.pagamentos.testar');
-    Route::post('/integracoes/plugins/{slug}/enable', [\App\Http\Controllers\IntegrationsController::class, 'enablePlugin'])->name('integrations.plugins.enable');
-    Route::post('/integracoes/plugins/{slug}/disable', [\App\Http\Controllers\IntegrationsController::class, 'disablePlugin'])->name('integrations.plugins.disable');
-    Route::delete('/integracoes/plugins/{slug}', [\App\Http\Controllers\IntegrationsController::class, 'uninstallPlugin'])->name('integrations.plugins.uninstall');
+    Route::middleware('team.permission:api_pagamentos.view')->group(function () {
+        Route::get('/aplicacoes-api', [\App\Http\Controllers\ApiApplicationsController::class, 'index'])->name('api-applications.index');
+        Route::get('/aplicacoes-api/create', [\App\Http\Controllers\ApiApplicationsController::class, 'create'])->name('api-applications.create');
+        Route::post('/aplicacoes-api', [\App\Http\Controllers\ApiApplicationsController::class, 'store'])->name('api-applications.store');
+        Route::get('/aplicacoes-api/{apiApplication}/edit', [\App\Http\Controllers\ApiApplicationsController::class, 'edit'])->name('api-applications.edit');
+        Route::put('/aplicacoes-api/{apiApplication}', [\App\Http\Controllers\ApiApplicationsController::class, 'update'])->name('api-applications.update');
+        Route::delete('/aplicacoes-api/{apiApplication}', [\App\Http\Controllers\ApiApplicationsController::class, 'destroy'])->name('api-applications.destroy');
+        Route::post('/aplicacoes-api/{apiApplication}/regenerate-key', [\App\Http\Controllers\ApiApplicationsController::class, 'regenerateKey'])->name('api-applications.regenerate-key');
+        Route::post('/aplicacoes-api/{apiApplication}/logo', [\App\Http\Controllers\ApiApplicationsController::class, 'uploadLogo'])->name('api-applications.logo.upload');
+        Route::delete('/aplicacoes-api/{apiApplication}/logo', [\App\Http\Controllers\ApiApplicationsController::class, 'removeLogo'])->name('api-applications.logo.remove');
+        Route::get('/docs/api-pagamentos', [\App\Http\Controllers\ApiDocsController::class, '__invoke'])->name('api-docs.pagamentos');
+        Route::get('/docs/api-pagamentos/testar', [\App\Http\Controllers\ApiDocsController::class, 'testar'])->name('api-docs.pagamentos.testar');
+    });
+    Route::middleware('team.permission:integracoes.view')->group(function () {
+        Route::post('/integracoes/plugins/{slug}/enable', [\App\Http\Controllers\IntegrationsController::class, 'enablePlugin'])->name('integrations.plugins.enable');
+        Route::post('/integracoes/plugins/{slug}/disable', [\App\Http\Controllers\IntegrationsController::class, 'disablePlugin'])->name('integrations.plugins.disable');
+        Route::delete('/integracoes/plugins/{slug}', [\App\Http\Controllers\IntegrationsController::class, 'uninstallPlugin'])->name('integrations.plugins.uninstall');
 
-    Route::post('/integracoes/utmify', [\App\Http\Controllers\UtmifyController::class, 'store'])->name('integrations.utmify.store');
-    Route::put('/integracoes/utmify/{utmify}', [\App\Http\Controllers\UtmifyController::class, 'update'])->name('integrations.utmify.update');
-    Route::delete('/integracoes/utmify/{utmify}', [\App\Http\Controllers\UtmifyController::class, 'destroy'])->name('integrations.utmify.destroy');
+        Route::post('/integracoes/utmify', [\App\Http\Controllers\UtmifyController::class, 'store'])->name('integrations.utmify.store');
+        Route::put('/integracoes/utmify/{utmify}', [\App\Http\Controllers\UtmifyController::class, 'update'])->name('integrations.utmify.update');
+        Route::delete('/integracoes/utmify/{utmify}', [\App\Http\Controllers\UtmifyController::class, 'destroy'])->name('integrations.utmify.destroy');
 
-    Route::post('/integracoes/spedy', [\App\Http\Controllers\SpedyController::class, 'store'])->name('integrations.spedy.store');
-    Route::put('/integracoes/spedy/{spedy}', [\App\Http\Controllers\SpedyController::class, 'update'])->name('integrations.spedy.update');
-    Route::delete('/integracoes/spedy/{spedy}', [\App\Http\Controllers\SpedyController::class, 'destroy'])->name('integrations.spedy.destroy');
+        Route::post('/integracoes/spedy', [\App\Http\Controllers\SpedyController::class, 'store'])->name('integrations.spedy.store');
+        Route::put('/integracoes/spedy/{spedy}', [\App\Http\Controllers\SpedyController::class, 'update'])->name('integrations.spedy.update');
+        Route::delete('/integracoes/spedy/{spedy}', [\App\Http\Controllers\SpedyController::class, 'destroy'])->name('integrations.spedy.destroy');
 
-    Route::get('/integracoes/webhooks', [\App\Http\Controllers\WebhookController::class, 'index'])->name('integrations.webhooks.index');
-    Route::post('/integracoes/webhooks', [\App\Http\Controllers\WebhookController::class, 'store'])->name('integrations.webhooks.store');
-    Route::put('/integracoes/webhooks/{webhook}', [\App\Http\Controllers\WebhookController::class, 'update'])->name('integrations.webhooks.update');
-    Route::delete('/integracoes/webhooks/{webhook}', [\App\Http\Controllers\WebhookController::class, 'destroy'])->name('integrations.webhooks.destroy');
-    Route::post('/integracoes/webhooks/{webhook}/test', [\App\Http\Controllers\WebhookController::class, 'test'])->name('integrations.webhooks.test');
-    Route::get('/integracoes/webhooks/{webhook}/logs', [\App\Http\Controllers\WebhookController::class, 'logs'])->name('integrations.webhooks.logs');
-    Route::get('/integracoes/webhooks/{webhook}/logs/{log}', [\App\Http\Controllers\WebhookController::class, 'showLog'])->name('integrations.webhooks.logs.show');
+        Route::post('/integracoes/cademi', [\App\Http\Controllers\CademiController::class, 'store'])->name('integrations.cademi.store');
+        Route::put('/integracoes/cademi/{cademi}', [\App\Http\Controllers\CademiController::class, 'update'])->name('integrations.cademi.update');
+        Route::delete('/integracoes/cademi/{cademi}', [\App\Http\Controllers\CademiController::class, 'destroy'])->name('integrations.cademi.destroy');
+    Route::get('/integracoes/cademi/{cademi}/tags', [\App\Http\Controllers\CademiController::class, 'tags'])->name('integrations.cademi.tags');
+
+        Route::get('/integracoes/webhooks', [\App\Http\Controllers\WebhookController::class, 'index'])->name('integrations.webhooks.index');
+        Route::post('/integracoes/webhooks', [\App\Http\Controllers\WebhookController::class, 'store'])->name('integrations.webhooks.store');
+        Route::put('/integracoes/webhooks/{webhook}', [\App\Http\Controllers\WebhookController::class, 'update'])->name('integrations.webhooks.update');
+        Route::delete('/integracoes/webhooks/{webhook}', [\App\Http\Controllers\WebhookController::class, 'destroy'])->name('integrations.webhooks.destroy');
+        Route::post('/integracoes/webhooks/{webhook}/test', [\App\Http\Controllers\WebhookController::class, 'test'])->name('integrations.webhooks.test');
+        Route::get('/integracoes/webhooks/{webhook}/logs', [\App\Http\Controllers\WebhookController::class, 'logs'])->name('integrations.webhooks.logs');
+        Route::get('/integracoes/webhooks/{webhook}/logs/{log}', [\App\Http\Controllers\WebhookController::class, 'showLog'])->name('integrations.webhooks.logs.show');
+    });
 
     // E-mail Marketing
-    Route::get('/email-marketing', [\App\Http\Controllers\EmailMarketingController::class, 'index'])->name('email-marketing.index');
-    Route::get('/email-marketing/create', [\App\Http\Controllers\EmailMarketingController::class, 'create'])->name('email-marketing.create');
-    Route::post('/email-marketing/preview-recipients', [\App\Http\Controllers\EmailMarketingController::class, 'previewRecipientsByFilter'])->name('email-marketing.preview-recipients-by-filter');
-    Route::post('/email-marketing', [\App\Http\Controllers\EmailMarketingController::class, 'store'])->name('email-marketing.store');
-    Route::get('/email-marketing/{campaign}/edit', [\App\Http\Controllers\EmailMarketingController::class, 'edit'])->name('email-marketing.edit');
-    Route::put('/email-marketing/{campaign}', [\App\Http\Controllers\EmailMarketingController::class, 'update'])->name('email-marketing.update');
-    Route::post('/email-marketing/{campaign}/preview-recipients', [\App\Http\Controllers\EmailMarketingController::class, 'previewRecipients'])->name('email-marketing.preview-recipients');
-    Route::post('/email-marketing/{campaign}/send', [\App\Http\Controllers\EmailMarketingController::class, 'send'])->name('email-marketing.send');
+    Route::middleware('team.permission:email_marketing.view')->group(function () {
+        Route::get('/email-marketing', [\App\Http\Controllers\EmailMarketingController::class, 'index'])->name('email-marketing.index');
+        Route::get('/email-marketing/create', [\App\Http\Controllers\EmailMarketingController::class, 'create'])->name('email-marketing.create');
+        Route::post('/email-marketing/preview-recipients', [\App\Http\Controllers\EmailMarketingController::class, 'previewRecipientsByFilter'])->name('email-marketing.preview-recipients-by-filter');
+        Route::post('/email-marketing', [\App\Http\Controllers\EmailMarketingController::class, 'store'])->name('email-marketing.store');
+        Route::get('/email-marketing/{campaign}/edit', [\App\Http\Controllers\EmailMarketingController::class, 'edit'])->name('email-marketing.edit');
+        Route::put('/email-marketing/{campaign}', [\App\Http\Controllers\EmailMarketingController::class, 'update'])->name('email-marketing.update');
+        Route::post('/email-marketing/{campaign}/preview-recipients', [\App\Http\Controllers\EmailMarketingController::class, 'previewRecipients'])->name('email-marketing.preview-recipients');
+        Route::post('/email-marketing/{campaign}/send', [\App\Http\Controllers\EmailMarketingController::class, 'send'])->name('email-marketing.send');
+    });
 
-    // Member Builder (área de membros do produto)
-    Route::get('/produtos/{produto}/member-builder', [\App\Http\Controllers\MemberBuilderController::class, 'index'])->name('member-builder.index');
-    Route::put('/produtos/{produto}/member-builder/config', [\App\Http\Controllers\MemberBuilderController::class, 'updateConfig'])->name('member-builder.config.update');
-    // POST aceito para config: frontend envia JSON e em muitos ambientes _method não é aplicado a body JSON
-    Route::post('/produtos/{produto}/member-builder/config', [\App\Http\Controllers\MemberBuilderController::class, 'updateConfig'])->name('member-builder.config.update.post');
-    Route::post('/produtos/{produto}/member-builder/upload', [\App\Http\Controllers\MemberBuilderController::class, 'uploadImage'])->name('member-builder.upload');
-    Route::post('/produtos/{produto}/member-builder/upload-pdf', [\App\Http\Controllers\MemberBuilderController::class, 'uploadPdf'])->name('member-builder.upload-pdf');
-    Route::post('/produtos/{produto}/member-builder/upload-badge', [\App\Http\Controllers\MemberBuilderController::class, 'uploadBadge'])->name('member-builder.upload-badge');
-    Route::post('/produtos/{produto}/member-builder/sections', [\App\Http\Controllers\MemberBuilderController::class, 'storeSection'])->name('member-builder.sections.store');
-    Route::put('/produtos/{produto}/member-builder/sections/{section}', [\App\Http\Controllers\MemberBuilderController::class, 'updateSection'])->name('member-builder.sections.update');
-    Route::delete('/produtos/{produto}/member-builder/sections/{section}', [\App\Http\Controllers\MemberBuilderController::class, 'destroySection'])->name('member-builder.sections.destroy');
-    Route::post('/produtos/{produto}/member-builder/sections/{section}/modules', [\App\Http\Controllers\MemberBuilderController::class, 'storeModule'])->name('member-builder.modules.store');
-    Route::put('/produtos/{produto}/member-builder/modules/{module}', [\App\Http\Controllers\MemberBuilderController::class, 'updateModule'])->name('member-builder.modules.update');
-    Route::delete('/produtos/{produto}/member-builder/modules/{module}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyModule'])->name('member-builder.modules.destroy');
-    Route::post('/produtos/{produto}/member-builder/modules/{module}/lessons', [\App\Http\Controllers\MemberBuilderController::class, 'storeLesson'])->name('member-builder.lessons.store');
-    Route::put('/produtos/{produto}/member-builder/lessons/{lesson}', [\App\Http\Controllers\MemberBuilderController::class, 'updateLesson'])->name('member-builder.lessons.update');
-    Route::delete('/produtos/{produto}/member-builder/lessons/{lesson}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyLesson'])->name('member-builder.lessons.destroy');
-    Route::post('/produtos/{produto}/member-builder/internal-products', [\App\Http\Controllers\MemberBuilderController::class, 'storeInternalProduct'])->name('member-builder.internal-products.store');
-    Route::delete('/produtos/{produto}/member-builder/internal-products/{internalProduct}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyInternalProduct'])->name('member-builder.internal-products.destroy');
-    Route::post('/produtos/{produto}/member-builder/turmas', [\App\Http\Controllers\MemberBuilderController::class, 'storeTurma'])->name('member-builder.turmas.store');
-    Route::put('/produtos/{produto}/member-builder/turmas/{turma}', [\App\Http\Controllers\MemberBuilderController::class, 'updateTurma'])->name('member-builder.turmas.update');
-    Route::delete('/produtos/{produto}/member-builder/turmas/{turma}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyTurma'])->name('member-builder.turmas.destroy');
-    Route::post('/produtos/{produto}/member-builder/turmas/{turma}/users', [\App\Http\Controllers\MemberBuilderController::class, 'attachTurmaUser'])->name('member-builder.turmas.users.attach');
-    Route::delete('/produtos/{produto}/member-builder/turmas/{turma}/users/{user}', [\App\Http\Controllers\MemberBuilderController::class, 'detachTurmaUser'])->name('member-builder.turmas.users.detach');
-    Route::post('/produtos/{produto}/member-builder/alunos', [\App\Http\Controllers\MemberBuilderController::class, 'storeNewAluno'])->name('member-builder.alunos.store');
-    Route::get('/produtos/{produto}/member-builder/comments', [\App\Http\Controllers\MemberBuilderController::class, 'commentsIndex'])->name('member-builder.comments.index');
-    Route::put('/produtos/{produto}/member-builder/comments/{comment}', [\App\Http\Controllers\MemberBuilderController::class, 'updateComment'])->name('member-builder.comments.update');
-    Route::post('/produtos/{produto}/member-builder/community-pages', [\App\Http\Controllers\MemberBuilderController::class, 'storeCommunityPage'])->name('member-builder.community-pages.store');
-    Route::put('/produtos/{produto}/member-builder/community-pages/{page}', [\App\Http\Controllers\MemberBuilderController::class, 'updateCommunityPage'])->name('member-builder.community-pages.update');
-    Route::delete('/produtos/{produto}/member-builder/community-pages/{page}', [\App\Http\Controllers\MemberBuilderController::class, 'destroyCommunityPage'])->name('member-builder.community-pages.destroy');
-    Route::post('/produtos/{produto}/member-builder/send-push', [\App\Http\Controllers\MemberBuilderController::class, 'sendPushNotification'])->name('member-builder.send-push');
 });
 
 Route::middleware(['auth', 'role:aluno'])->group(function () {

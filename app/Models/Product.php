@@ -16,6 +16,7 @@ class Product extends Model
 
     public const TYPE_APLICATIVO = 'aplicativo';
     public const TYPE_AREA_MEMBROS = 'area_membros';
+    public const TYPE_AREA_MEMBROS_EXTERNA = 'area_membros_externa';
     public const TYPE_LINK = 'link';
     public const TYPE_LINK_PAGAMENTO = 'link_pagamento';
 
@@ -551,8 +552,9 @@ class Product extends Model
 
     public function hasMemberAreaAccess(User $user): bool
     {
-        // Infoprodutor do mesmo tenant do produto tem acesso automático à área de membros
-        if ($user->canAccessPanel() && $user->tenant_id === $this->tenant_id) {
+        // Admin/Infoprodutor do mesmo tenant do produto tem acesso automático à área de membros
+        // (usuário de equipe não deve ganhar acesso automático)
+        if (($user->isAdmin() || $user->isInfoprodutor()) && $user->tenant_id === $this->tenant_id) {
             return true;
         }
         return $this->users()->where('user_id', $user->id)->exists();
@@ -572,6 +574,11 @@ class Product extends Model
             self::TYPE_AREA_MEMBROS => [
                 'label' => 'Área de membros',
                 'description' => 'Área exclusiva para alunos com PWA. Subdomínio ou domínio customizado.',
+                'available' => true,
+            ],
+            self::TYPE_AREA_MEMBROS_EXTERNA => [
+                'label' => 'Área de membros externa',
+                'description' => 'Entrega o acesso em uma plataforma externa (ex.: Cademí) após o pagamento.',
                 'available' => true,
             ],
             self::TYPE_LINK => [

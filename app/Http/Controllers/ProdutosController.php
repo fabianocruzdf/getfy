@@ -9,6 +9,7 @@ use App\Events\ProductDuplicated;
 use App\Events\ProductIndexLoading;
 use App\Events\ProductUpdated;
 use App\Gateways\GatewayRegistry;
+use App\Models\CademiIntegration;
 use App\Models\GatewayCredential;
 use App\Models\Product;
 use App\Models\ProductOffer;
@@ -16,7 +17,9 @@ use App\Models\ProductOrderBump;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
 use App\Services\StorageService;
+use App\Services\TeamAccessService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -26,6 +29,7 @@ class ProdutosController extends Controller
     private const TYPES = [
         Product::TYPE_APLICATIVO,
         Product::TYPE_AREA_MEMBROS,
+        Product::TYPE_AREA_MEMBROS_EXTERNA,
         Product::TYPE_LINK,
         Product::TYPE_LINK_PAGAMENTO,
     ];
@@ -39,7 +43,12 @@ class ProdutosController extends Controller
     {
         $tenantId = auth()->user()->tenant_id;
         $rates = config('products.rates', ['brl_eur' => 0.16, 'brl_usd' => 0.18]);
-        $products = Product::forTenant($tenantId)->orderBy('name')->paginate(20)->withQueryString()->through(fn (Product $p) => $this->productToArray($p, $rates));
+        $query = Product::forTenant($tenantId)->orderBy('name');
+        if (auth()->user()->isTeam()) {
+            $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
+            $query->whereIn('id', $allowed ?: ['__none__']);
+        }
+        $products = $query->paginate(20)->withQueryString()->through(fn (Product $p) => $this->productToArray($p, $rates));
 
         $productTypes = collect(Product::typeConfig())->map(fn ($config, $value) => [
             'value' => $value,
@@ -207,6 +216,24 @@ class ProdutosController extends Controller
         );
         $produtoArray['checkout_config'] = $checkoutConfig;
 
+        $external = DB::table('cademi_integration_product')
+            ->where('product_id', $produto->id)
+            ->orderByDesc('id')
+            ->first();
+        $produtoArray['external_member_area'] = $external ? [
+            'integration_id' => (int) $external->cademi_integration_id,
+            'cademi_tag_id' => $external->cademi_tag_id !== null ? (int) $external->cademi_tag_id : null,
+            'cademi_produto_id' => $external->cademi_produto_id !== null ? (int) $external->cademi_produto_id : null,
+            'cademi_produto_ids' => property_exists($external, 'cademi_produto_ids') && $external->cademi_produto_ids
+                ? (json_decode((string) $external->cademi_produto_ids, true) ?: [])
+                : [],
+        ] : [
+            'integration_id' => null,
+            'cademi_tag_id' => null,
+            'cademi_produto_id' => null,
+            'cademi_produto_ids' => [],
+        ];
+
         $productsForUpsell = Product::where('tenant_id', $tenantId)
             ->where('is_active', true)
             ->where('id', '!=', $produto->id)
@@ -227,15 +254,75 @@ class ProdutosController extends Controller
 
         $gatewaysByMethod = $this->gatewaysByMethodForTenant($tenantId);
 
+        $cademiIntegrations = CademiIntegration::forTenant($tenantId)
+            ->orderBy('name')
+            ->get(['id', 'name'])
+            ->map(fn (CademiIntegration $i) => ['id' => $i->id, 'name' => $i->name])
+            ->values()
+            ->all();
+
         return Inertia::render('Produtos/Edit', [
             'produto' => $produtoArray,
             'productTypes' => $productTypes,
             'billingTypes' => $billingTypes,
             'exchange_rates' => $rates,
             'gateways_by_method' => $gatewaysByMethod,
+            'cademi_integrations' => $cademiIntegrations,
             'layoutContentFlushLeft' => true,
             'pageTitleBadge' => $produto->name,
         ]);
+    }
+
+    public function updateExternalMemberArea(Request $request, Product $produto)
+    {
+        $this->authorizeProduct($produto);
+
+        $validated = $request->validate([
+            'cademi_integration_id' => ['nullable', 'integer', 'exists:cademi_integrations,id'],
+            'cademi_tag_id' => ['nullable', 'integer', 'min:1'],
+            'cademi_produto_id' => ['nullable', 'integer', 'min:1'],
+            'cademi_produto_ids' => ['nullable', 'array'],
+            'cademi_produto_ids.*' => ['integer', 'min:1'],
+        ]);
+
+        $tenantId = auth()->user()->tenant_id;
+        if (! empty($validated['cademi_integration_id'])) {
+            $exists = CademiIntegration::forTenant($tenantId)->where('id', (int) $validated['cademi_integration_id'])->exists();
+            if (! $exists) {
+                abort(422, 'Integração Cademí inválida para este tenant.');
+            }
+        }
+
+        // TAG é opcional (postback pode funcionar sem tags).
+
+        DB::table('cademi_integration_product')->where('product_id', $produto->id)->delete();
+
+        if (! empty($validated['cademi_integration_id'])) {
+            $produtoIds = [];
+            if (! empty($validated['cademi_produto_ids']) && is_array($validated['cademi_produto_ids'])) {
+                $produtoIds = array_values(array_unique(array_map('intval', $validated['cademi_produto_ids'])));
+                $produtoIds = array_values(array_filter($produtoIds, fn ($v) => $v > 0));
+            } elseif (! empty($validated['cademi_produto_id'])) {
+                $produtoIds = [(int) $validated['cademi_produto_id']];
+            }
+
+            if ($produtoIds === []) {
+                abort(422, 'Informe ao menos 1 Produto ID da Cademí.');
+            }
+
+            DB::table('cademi_integration_product')->insert([
+                'cademi_integration_id' => (int) $validated['cademi_integration_id'],
+                'product_id' => $produto->id,
+                'cademi_tag_id' => $validated['cademi_tag_id'] ?? null,
+                // keep legacy single field in sync (first id)
+                'cademi_produto_id' => $produtoIds[0] ?? null,
+                'cademi_produto_ids' => json_encode($produtoIds),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        return response()->json(['ok' => true]);
     }
 
     public function update(Request $request, Product $produto)
@@ -713,6 +800,13 @@ class ProdutosController extends Controller
         $tenantId = auth()->user()->tenant_id;
         if ($produto->tenant_id !== $tenantId) {
             abort(403);
+        }
+
+        if (auth()->user()->isTeam()) {
+            $allowed = app(TeamAccessService::class)->allowedProductIdsFor(auth()->user());
+            if (! in_array($produto->id, $allowed, true)) {
+                abort(403);
+            }
         }
     }
 

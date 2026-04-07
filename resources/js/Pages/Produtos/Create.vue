@@ -36,6 +36,7 @@ const form = useForm({
                         <label class="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Tipo</label>
                         <select v-model="form.type" class="mt-1 block w-full rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 px-3 py-2">
                             <option value="area_membros">Área de membros</option>
+                            <option value="area_membros_externa">Área de membros externa</option>
                             <option value="link">Link</option>
                             <option value="link_pagamento">Somente link de pagamento</option>
                         </select>

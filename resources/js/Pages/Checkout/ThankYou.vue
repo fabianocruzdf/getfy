@@ -12,6 +12,7 @@ const props = defineProps({
     redirect_url: { type: String, default: '/' },
     redirect_label: { type: String, default: 'Acessar área de membros' },
     subtitle: { type: String, default: 'Seu pedido foi registrado. Acesse o conteúdo pelo link abaixo.' },
+    show_button: { type: Boolean, default: true },
     conversion_pixels: { type: Object, default: () => ({}) },
     order_id: { type: Number, default: null },
     order_amount: { type: Number, default: 0 },
@@ -41,6 +42,7 @@ onMounted(() => {
                 {{ subtitle }}
             </p>
             <a
+                v-if="show_button"
                 :href="redirect_url"
                 class="mt-6 inline-flex w-full justify-center rounded-xl bg-[var(--color-primary,#0ea5e9)] px-4 py-3 text-sm font-semibold text-white shadow-sm hover:opacity-90 transition-opacity"
             >
