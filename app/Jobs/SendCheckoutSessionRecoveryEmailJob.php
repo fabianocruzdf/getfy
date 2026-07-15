@@ -84,11 +84,11 @@ class SendCheckoutSessionRecoveryEmailJob implements ShouldQueue
         ];
 
         $subject = str_replace(array_keys($replace), array_values($replace), $subjectTpl);
-        if (trim($bodyHtmlTpl) !== '') {
-            $body = str_replace(array_keys($replace), array_values($replace), $bodyHtmlTpl);
-        } else {
+        if (trim($bodyTextTpl) !== '') {
             $text = str_replace(array_keys($replace), array_values($replace), $bodyTextTpl);
             $body = $this->wrapTextInPrettyHtml($text, $checkoutUrl);
+        } else {
+            $body = str_replace(array_keys($replace), array_values($replace), $bodyHtmlTpl);
         }
 
         try {
@@ -144,3 +144,4 @@ class SendCheckoutSessionRecoveryEmailJob implements ShouldQueue
             . '</td></tr></table></td></tr></table>';
     }
 }
+

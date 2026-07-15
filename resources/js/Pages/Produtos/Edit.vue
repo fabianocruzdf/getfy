@@ -45,7 +45,6 @@ import {
 } from 'lucide-vue-next';
 import axios from 'axios';
 import EmailTemplatePreview from '@/components/produtos/EmailTemplatePreview.vue';
-import VisualEmailEditor from '@/components/email/VisualEmailEditor.vue';
 import ProductConversionPixelsInfo from '@/components/produtos/ProductConversionPixelsInfo.vue';
 
 function getCsrfToken() {
@@ -79,7 +78,6 @@ const DEFAULT_EMAIL_TEMPLATE = {
     subject: 'Seu acesso a {nome_produto}',
     body_text:
         'Olá, {nome_cliente}!\n\nObrigado por adquirir {nome_produto}.\n\nUse o link abaixo para acessar seu conteúdo:\n{link_acesso}\n\nQualquer dúvida, responda este e-mail.',
-    body_html: '',
 };
 
 const DEFAULT_CART_RECOVERY_EMAIL = {
@@ -124,44 +122,6 @@ const DEFAULT_SMS_CONFIG = {
 };
 
 const SMS_MAX_LENGTH = 160;
-
-const accessEmailPlaceholders = [
-    { value: '{nome_cliente}', label: 'Nome do cliente' },
-    { value: '{nome_produto}', label: 'Nome do produto' },
-    { value: '{link_acesso}', label: 'Link de acesso' },
-    { value: '{email_cliente}', label: 'E-mail do cliente' },
-    { value: '{senha}', label: 'Senha' },
-];
-
-const recoveryEmailPlaceholders = [
-    { value: '{nome_cliente}', label: 'Nome do cliente' },
-    { value: '{email_cliente}', label: 'E-mail do cliente' },
-    { value: '{nome_produto}', label: 'Nome do produto' },
-    { value: '{valor}', label: 'Valor' },
-    { value: '{link_checkout}', label: 'Link do checkout' },
-];
-
-function escapeEmailHtml(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-}
-
-function textToEmailHtml(value) {
-    return escapeEmailHtml(value)
-        .split(/\n{2,}/)
-        .filter((paragraph) => paragraph.trim())
-        .map((paragraph) => `<p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#334155;">${paragraph.replace(/\n/g, '<br>')}</p>`)
-        .join('');
-}
-
-function initialEmailHtml(template, fallback) {
-    const html = String(template?.body_html ?? '').trim();
-    return html || textToEmailHtml(template?.body_text ?? fallback?.body_text ?? '');
-}
 
 const SMS_DELAY_UNIT_OPTIONS = [
     { id: 'minutes', label: 'minutos', singular: 'minuto' },
@@ -332,7 +292,6 @@ const currentTab = computed(() => {
     const t = q.get('tab');
     return TABS.value.some((tab) => tab.id === t) ? t : 'geral';
 });
-const emailEditorTab = ref('access');
 
 function setTab(tabId) {
     router.get(`/produtos/${props.produto.id}/edit?tab=${tabId}`, {}, { preserveState: true });
@@ -395,12 +354,10 @@ const creRaw = props.produto.checkout_config?.cart_recovery_email;
 const cartRecoveryInitial = {
     ...DEFAULT_CART_RECOVERY_EMAIL,
     ...(creRaw && typeof creRaw === 'object' ? creRaw : {}),
-    stages: Object.fromEntries(
-        Object.entries(DEFAULT_CART_RECOVERY_EMAIL.stages).map(([key, fallback]) => {
-            const stage = creRaw?.stages?.[key] && typeof creRaw.stages[key] === 'object' ? creRaw.stages[key] : {};
-            return [key, { ...fallback, ...stage, body_html: initialEmailHtml(stage, fallback) }];
-        })
-    ),
+    stages: {
+        ...DEFAULT_CART_RECOVERY_EMAIL.stages,
+        ...(creRaw?.stages && typeof creRaw.stages === 'object' ? creRaw.stages : {}),
+    },
 };
 const smsRaw = props.produto.checkout_config?.sms;
 const smsInitial = {
@@ -543,7 +500,6 @@ const form = useForm({
         from_name: et.from_name ?? DEFAULT_EMAIL_TEMPLATE.from_name,
         subject: et.subject ?? DEFAULT_EMAIL_TEMPLATE.subject,
         body_text: et.body_text ?? DEFAULT_EMAIL_TEMPLATE.body_text,
-        body_html: initialEmailHtml(et, DEFAULT_EMAIL_TEMPLATE),
     },
     cart_recovery_email: cartRecoveryInitial,
     sms: smsInitial,
@@ -1498,20 +1454,6 @@ const typeIcons = {
     link_pagamento: CreditCard,
 };
 
-function buildCartRecoveryEmailPayload(value) {
-    const recovery = value && typeof value === 'object' ? value : {};
-    const stages = recovery.stages && typeof recovery.stages === 'object' ? recovery.stages : {};
-
-    return {
-        enabled: !!recovery.enabled,
-        stages: Object.fromEntries(['10m', '5h', '24h'].map((key) => [key, {
-            subject: String(stages[key]?.subject ?? ''),
-            body_text: '',
-            body_html: String(stages[key]?.body_html ?? ''),
-        }])),
-    };
-}
-
 function submit() {
     if (smsValidationError.value) {
         return;
@@ -1533,7 +1475,29 @@ function submit() {
         }
         fd.append('currency', form.currency);
         fd.append('is_active', form.is_active ? '1' : '0');
-        const crePayload = buildCartRecoveryEmailPayload(form.cart_recovery_email);
+        // Envia texto simples; o backend monta o HTML bonito automaticamente.
+        const cre = form.cart_recovery_email && typeof form.cart_recovery_email === 'object' ? form.cart_recovery_email : {};
+        const creStages = cre?.stages && typeof cre.stages === 'object' ? cre.stages : {};
+        const crePayload = {
+            enabled: !!cre.enabled,
+            stages: {
+                '10m': {
+                    subject: String(creStages?.['10m']?.subject ?? ''),
+                    body_text: String(creStages?.['10m']?.body_text ?? ''),
+                    body_html: '',
+                },
+                '5h': {
+                    subject: String(creStages?.['5h']?.subject ?? ''),
+                    body_text: String(creStages?.['5h']?.body_text ?? ''),
+                    body_html: '',
+                },
+                '24h': {
+                    subject: String(creStages?.['24h']?.subject ?? ''),
+                    body_text: String(creStages?.['24h']?.body_text ?? ''),
+                    body_html: '',
+                },
+            },
+        };
         fd.append('cart_recovery_email', JSON.stringify(crePayload));
         fd.append('sms', JSON.stringify(buildSmsPayload()));
         if (form.payment_gateways) {
@@ -1587,8 +1551,9 @@ function submit() {
             fd.append('email_template[logo_url]', form.email_template.logo_url || '');
             fd.append('email_template[from_name]', form.email_template.from_name || '');
             fd.append('email_template[subject]', form.email_template.subject || '');
-            fd.append('email_template[body_text]', '');
-            fd.append('email_template[body_html]', form.email_template.body_html || '');
+            fd.append('email_template[body_text]', form.email_template.body_text || '');
+            // Mantém compatibilidade mas evita o usuário ter que digitar HTML.
+            fd.append('email_template[body_html]', '');
         }
         fd.append('deliverable_link', form.deliverable_link || '');
         if (form.billing_type === 'subscription' && form.subscription) {
@@ -1639,12 +1604,6 @@ function submit() {
                 delete data.subscription;
             }
             data.sms = buildSmsPayload();
-            data.email_template = {
-                ...data.email_template,
-                body_text: '',
-                body_html: String(data.email_template?.body_html ?? ''),
-            };
-            data.cart_recovery_email = buildCartRecoveryEmailPayload(data.cart_recovery_email);
             return data;
         }).put(url);
     }
@@ -3102,28 +3061,9 @@ function submit() {
         <!-- Aba E-mail -->
         <template v-if="currentTab === 'email'">
             <form class="mx-auto w-full max-w-3xl space-y-8 xl:max-w-6xl" @submit.prevent="submit">
-                <div class="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-1.5 dark:border-zinc-700 dark:bg-zinc-800/70 sm:flex-row">
-                    <button
-                        type="button"
-                        class="flex-1 rounded-lg px-4 py-3 text-sm font-semibold transition"
-                        :class="emailEditorTab === 'access' ? 'bg-white text-[var(--color-primary)] shadow-sm dark:bg-zinc-700' : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white'"
-                        @click="emailEditorTab = 'access'"
-                    >
-                        Template do e-mail de acesso
-                    </button>
-                    <button
-                        type="button"
-                        class="flex flex-1 items-center justify-center gap-2 rounded-lg px-4 py-3 text-sm font-semibold transition"
-                        :class="emailEditorTab === 'recovery' ? 'bg-white text-[var(--color-primary)] shadow-sm dark:bg-zinc-700' : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white'"
-                        @click="emailEditorTab = 'recovery'"
-                    >
-                        Template de recuperação
-                        <span v-if="form.cart_recovery_email.enabled" class="h-2 w-2 rounded-full bg-emerald-500" title="Recuperação ativa" />
-                    </button>
-                </div>
                 <div class="grid grid-cols-1 gap-8 xl:grid-cols-2">
                     <!-- Configuração do template -->
-                    <section v-if="emailEditorTab === 'access'" class="panel-table xl:col-span-2">
+                    <section class="panel-table">
                         <div class="border-b border-zinc-200/80 bg-gradient-to-r from-zinc-50/90 to-zinc-100/50 px-6 py-5 dark:from-zinc-800/80 dark:to-zinc-800/50">
                             <h2 class="text-base font-semibold text-zinc-900 dark:text-white">Template do e-mail de acesso</h2>
                             <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
@@ -3166,12 +3106,8 @@ function submit() {
                                 <input v-model="form.email_template.subject" type="text" placeholder="Seu acesso a {nome_produto}" :class="inputClass" />
                             </div>
                             <div>
-                                <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Mensagem</label>
-                                <VisualEmailEditor
-                                    v-model="form.email_template.body_html"
-                                    :placeholders="accessEmailPlaceholders"
-                                    min-height="360px"
-                                />
+                                <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Mensagem (texto)</label>
+                                <textarea v-model="form.email_template.body_text" rows="14" :class="inputClass" placeholder="Digite a mensagem (texto simples)..." />
                                 <p class="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
                                     Placeholders: <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-700">{nome_cliente}</code>,
                                     <code class="rounded bg-zinc-100 px-1 dark:bg-zinc-700">{nome_produto}</code>,
@@ -3185,7 +3121,7 @@ function submit() {
                     </section>
 
                     <!-- Recuperação de carrinho -->
-                    <section v-if="emailEditorTab === 'recovery'" class="panel-table xl:col-span-2">
+                    <section class="panel-table">
                         <div class="border-b border-zinc-200/80 bg-gradient-to-r from-zinc-50/90 to-zinc-100/50 px-6 py-5 dark:from-zinc-800/80 dark:to-zinc-800/50">
                             <div class="flex items-start justify-between gap-4">
                                 <div>
@@ -3216,8 +3152,8 @@ function submit() {
                                     <input v-model="form.cart_recovery_email.stages['10m'].subject" :disabled="!form.cart_recovery_email.enabled" type="text" :class="inputClass" placeholder="Você ainda quer garantir {nome_produto}?" />
                                 </div>
                                 <div>
-                                    <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Mensagem</label>
-                                    <VisualEmailEditor v-model="form.cart_recovery_email.stages['10m'].body_html" :disabled="!form.cart_recovery_email.enabled" :placeholders="recoveryEmailPlaceholders" min-height="240px" />
+                                    <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Mensagem (texto)</label>
+                                    <textarea v-model="form.cart_recovery_email.stages['10m'].body_text" :disabled="!form.cart_recovery_email.enabled" rows="10" :class="inputClass" placeholder="Digite a mensagem (texto simples)..." />
                                 </div>
                             </div>
 
@@ -3230,8 +3166,8 @@ function submit() {
                                     <input v-model="form.cart_recovery_email.stages['5h'].subject" :disabled="!form.cart_recovery_email.enabled" type="text" :class="inputClass" placeholder="Última chance de garantir {nome_produto}" />
                                 </div>
                                 <div>
-                                    <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Mensagem</label>
-                                    <VisualEmailEditor v-model="form.cart_recovery_email.stages['5h'].body_html" :disabled="!form.cart_recovery_email.enabled" :placeholders="recoveryEmailPlaceholders" min-height="240px" />
+                                    <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Mensagem (texto)</label>
+                                    <textarea v-model="form.cart_recovery_email.stages['5h'].body_text" :disabled="!form.cart_recovery_email.enabled" rows="10" :class="inputClass" placeholder="Digite a mensagem (texto simples)..." />
                                 </div>
                             </div>
 
@@ -3244,15 +3180,15 @@ function submit() {
                                     <input v-model="form.cart_recovery_email.stages['24h'].subject" :disabled="!form.cart_recovery_email.enabled" type="text" :class="inputClass" placeholder="Seu link para {nome_produto} (caso ainda queira)" />
                                 </div>
                                 <div>
-                                    <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Mensagem</label>
-                                    <VisualEmailEditor v-model="form.cart_recovery_email.stages['24h'].body_html" :disabled="!form.cart_recovery_email.enabled" :placeholders="recoveryEmailPlaceholders" min-height="240px" />
+                                    <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Mensagem (texto)</label>
+                                    <textarea v-model="form.cart_recovery_email.stages['24h'].body_text" :disabled="!form.cart_recovery_email.enabled" rows="10" :class="inputClass" placeholder="Digite a mensagem (texto simples)..." />
                                 </div>
                             </div>
                         </div>
                     </section>
 
                     <!-- Preview do e-mail -->
-                    <section v-if="emailEditorTab === 'access'" class="panel-table xl:col-span-2">
+                    <section class="panel-table xl:sticky xl:top-6">
                         <div class="border-b border-zinc-200/80 bg-zinc-50/80 px-6 py-4 dark:border-zinc-700/80 dark:bg-zinc-800/50">
                             <h2 class="text-base font-semibold text-zinc-900 dark:text-white">Preview do e-mail</h2>
                             <p class="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">Como o e-mail será exibido para o cliente.</p>
@@ -3261,7 +3197,7 @@ function submit() {
                             <EmailTemplatePreview
                                 :logo-url="form.email_template.logo_url"
                                 :subject="form.email_template.subject"
-                                :body-html="form.email_template.body_html"
+                                :body-html="(form.email_template.body_text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').split('\\n\\n').filter((p) => p.trim()).map((p) => `<p style=&quot;margin:0 0 16px;font-size:15px;line-height:1.6;color:#334155;&quot;>${p.replace(/\\n/g, '<br/>')}</p>`).join('')"
                                 :from-name="form.email_template.from_name"
                             />
                         </div>
