@@ -88,17 +88,17 @@ const DEFAULT_CART_RECOVERY_EMAIL = {
         '10m': {
             subject: 'Você ainda quer garantir {nome_produto}?',
             body_text:
-                'Olá, {nome_cliente}!\n\nPercebi que você iniciou sua compra de {nome_produto} e não concluiu.\n\nSe ainda faz sentido pra você, é só retomar pelo link abaixo:\n{link_checkout}\n\nSe precisar de ajuda, é só responder este e-mail.',
+                'Olá, {nome_cliente}!\n\nVocê estava a poucos passos de concluir sua compra de {nome_produto}. Deixamos tudo pronto para você continuar de onde parou.\n\nProduto: {nome_produto}\nValor: {valor}\n\nRetome sua compra com segurança:\n{link_checkout}\n\nSe tiver alguma dúvida, responda este e-mail. Estamos à disposição para ajudar.',
         },
         '5h': {
-            subject: 'Última chance de garantir {nome_produto}',
+            subject: 'Podemos ajudar com sua compra de {nome_produto}?',
             body_text:
-                '{nome_cliente}, posso te ajudar?\n\nSua compra de {nome_produto} ainda não foi finalizada.\n\nPara concluir agora, use este link:\n{link_checkout}\n\nSe teve algum erro no pagamento, basta tentar novamente pelo link.',
+                'Olá, {nome_cliente}!\n\nNotamos que sua compra de {nome_produto} ainda não foi concluída. Se ocorreu algum problema no pagamento, você pode tentar novamente com segurança.\n\nProduto: {nome_produto}\nValor: {valor}\n\nContinuar compra:\n{link_checkout}\n\nPrecisa de ajuda? Responda este e-mail e conte o que aconteceu.',
         },
         '24h': {
             subject: 'Seu link para {nome_produto} (caso ainda queira)',
             body_text:
-                'Último lembrete.\n\nDeixando aqui seu link para concluir a compra de {nome_produto} quando for melhor:\n{link_checkout}\n\nSe você já concluiu, pode ignorar este e-mail.',
+                'Olá, {nome_cliente}!\n\nEste é nosso último lembrete sobre sua compra de {nome_produto}. Caso ainda tenha interesse, seu link continua disponível abaixo.\n\nProduto: {nome_produto}\nValor: {valor}\n\nConcluir compra:\n{link_checkout}\n\nSe você já finalizou ou mudou de ideia, pode ignorar esta mensagem tranquilamente.',
         },
     },
 };
@@ -286,6 +286,7 @@ const BASE_TABS = [
 
 const props = defineProps({
     produto: { type: Object, required: true },
+    default_cart_recovery_email: { type: Object, default: () => ({ stages: {} }) },
     productTypes: { type: Array, default: () => [] },
     billingTypes: { type: Array, default: () => [] },
     exchange_rates: { type: Object, default: () => ({ brl_eur: 0.16, brl_usd: 0.18 }) },
@@ -1509,6 +1510,22 @@ function buildCartRecoveryEmailPayload(value) {
             body_text: '',
             body_html: String(stages[key]?.body_html ?? ''),
         }])),
+    };
+}
+
+function restoreDefaultRecoveryLayout(stageKey) {
+    const defaultStage = props.default_cart_recovery_email?.stages?.[stageKey];
+    if (!defaultStage) return;
+    const confirmed = window.confirm(
+        'Usar o layout padrão?\n\nO assunto e todo o conteúdo atual desta etapa serão substituídos. Essa ação só poderá ser desfeita antes de salvar a página.',
+    );
+    if (!confirmed) return;
+
+    form.cart_recovery_email.stages[stageKey] = {
+        ...form.cart_recovery_email.stages[stageKey],
+        subject: defaultStage.subject || '',
+        body_text: defaultStage.body_text || '',
+        body_html: defaultStage.body_html || '',
     };
 }
 
@@ -3210,6 +3227,7 @@ function submit() {
                             <div class="panel-card-sm space-y-3 dark:bg-zinc-900/20">
                                 <div class="flex items-center justify-between gap-3">
                                     <h3 class="text-sm font-semibold text-zinc-900 dark:text-white">Etapa 1 — 10 minutos</h3>
+                                    <button type="button" class="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200" @click="restoreDefaultRecoveryLayout('10m')">Usar layout padrão</button>
                                 </div>
                                 <div>
                                     <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Assunto</label>
@@ -3224,6 +3242,7 @@ function submit() {
                             <div class="panel-card-sm space-y-3 dark:bg-zinc-900/20">
                                 <div class="flex items-center justify-between gap-3">
                                     <h3 class="text-sm font-semibold text-zinc-900 dark:text-white">Etapa 2 — 5 horas</h3>
+                                    <button type="button" class="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200" @click="restoreDefaultRecoveryLayout('5h')">Usar layout padrão</button>
                                 </div>
                                 <div>
                                     <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Assunto</label>
@@ -3238,6 +3257,7 @@ function submit() {
                             <div class="panel-card-sm space-y-3 dark:bg-zinc-900/20">
                                 <div class="flex items-center justify-between gap-3">
                                     <h3 class="text-sm font-semibold text-zinc-900 dark:text-white">Etapa 3 — 24 horas</h3>
+                                    <button type="button" class="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200" @click="restoreDefaultRecoveryLayout('24h')">Usar layout padrão</button>
                                 </div>
                                 <div>
                                     <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Assunto</label>
