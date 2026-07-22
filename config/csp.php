@@ -5,6 +5,10 @@
  *
  * Domínios extra via .env (vírgulas) para self-hosted / integrações customizadas:
  *   CSP_EXTRA_SCRIPT_SRC, CSP_EXTRA_CONNECT_SRC, CSP_EXTRA_FRAME_SRC
+ *
+ * Meta Conversions API Gateway / Signals Gateway usam hosts dinâmicos multi-label
+ * (ex.: *.ecs.*.on.aws, *.us-central1.run.app) que CSP Level 3 não cobre com um
+ * único wildcard. Nesse caso, adicione a URL do gateway em CSP_EXTRA_CONNECT_SRC.
  */
 
 $scriptSources = [
@@ -59,8 +63,12 @@ $connectSources = [
     'https://cobrancas-h.api.efipay.com.br',
     // Endereço
     'https://viacep.com.br',
-    // Pixels / analytics
+    // Pixels / analytics (Meta Pixel + CAPI browser)
     'https://www.facebook.com',
+    'https://connect.facebook.net',
+    'https://graph.facebook.com',
+    'https://*.facebook.com',
+    'https://*.facebook.net',
     'https://www.googletagmanager.com',
     'https://www.googleadservices.com',
     'https://googleads.g.doubleclick.net',

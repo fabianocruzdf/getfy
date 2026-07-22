@@ -54,6 +54,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -62,8 +63,12 @@ use Inertia\Response;
 
 class CheckoutController extends Controller
 {
-    private function rollbackFailedOrder(Order $order, \Throwable $originalError): void
+    private function rollbackFailedOrder(?Order $order, \Throwable $originalError): void
     {
+        if ($order === null) {
+            return;
+        }
+
         try {
             $order->delete();
             return;
@@ -898,16 +903,20 @@ class CheckoutController extends Controller
                 'position' => 0,
             ]);
             $pos = 1;
+            $hasBumpColumn = Schema::hasColumn('order_items', 'product_order_bump_id');
             foreach ($selectedBumps as $bump) {
-                OrderItem::create([
+                $item = [
                     'order_id' => $order->id,
                     'product_id' => $bump->target_product_id,
                     'product_offer_id' => $bump->target_product_offer_id,
                     'subscription_plan_id' => $bump->target_subscription_plan_id,
-                    'product_order_bump_id' => $bump->id,
                     'amount' => $bump->getEffectiveAmountBrl(),
                     'position' => $pos++,
-                ]);
+                ];
+                if ($hasBumpColumn) {
+                    $item['product_order_bump_id'] = $bump->id;
+                }
+                OrderItem::create($item);
             }
             return $order;
         };
@@ -982,15 +991,16 @@ class CheckoutController extends Controller
                 return back()->with('error', 'Aguarde: estamos gerando seu PIX. Não clique novamente.');
             }
 
-            $order = $createOrderAndItems(array_merge($orderPayload, [
-                'status' => 'pending',
-                'gateway' => null,
-                'gateway_id' => null,
-                'metadata' => array_merge($orderMetadata, ['checkout_payment_method' => 'pix']),
-            ]));
-            $order->load('orderItems');
-            event(new OrderPending($order));
+            $order = null;
             try {
+                $order = $createOrderAndItems(array_merge($orderPayload, [
+                    'status' => 'pending',
+                    'gateway' => null,
+                    'gateway_id' => null,
+                    'metadata' => array_merge($orderMetadata, ['checkout_payment_method' => 'pix']),
+                ]));
+                $order->load('orderItems');
+                event(new OrderPending($order));
                 $paymentService = app(PaymentService::class);
                 $fake = FakeConsumerData::getForGateway($order->id);
                 $rawDoc = preg_replace('/\D/', '', $validated['cpf'] ?? '');
@@ -1090,24 +1100,25 @@ class CheckoutController extends Controller
                     return back()->withErrors(['payment_method' => 'Pushin Pay: API Token não configurado.']);
                 }
 
-                $order = $createOrderAndItems(array_merge($orderPayload, [
-                    'status' => 'pending',
-                    'gateway' => null,
-                    'gateway_id' => null,
-                    'metadata' => array_merge($orderMetadata, ['checkout_payment_method' => 'pix_auto']),
-                ]));
-                $order->load('orderItems');
-                event(new OrderPending($order));
-
-                $rawDoc = preg_replace('/\D/', '', $validated['cpf'] ?? '');
-                $fake = FakeConsumerData::getForGateway($order->id);
-                $consumer = [
-                    'name' => trim((string) ($validated['name'] ?? '')) !== '' ? $validated['name'] : $fake['name'],
-                    'document' => strlen($rawDoc) >= 11 ? $rawDoc : $fake['document'],
-                    'email' => $validated['email'],
-                ];
-
+                $order = null;
                 try {
+                    $order = $createOrderAndItems(array_merge($orderPayload, [
+                        'status' => 'pending',
+                        'gateway' => null,
+                        'gateway_id' => null,
+                        'metadata' => array_merge($orderMetadata, ['checkout_payment_method' => 'pix_auto']),
+                    ]));
+                    $order->load('orderItems');
+                    event(new OrderPending($order));
+
+                    $rawDoc = preg_replace('/\D/', '', $validated['cpf'] ?? '');
+                    $fake = FakeConsumerData::getForGateway($order->id);
+                    $consumer = [
+                        'name' => trim((string) ($validated['name'] ?? '')) !== '' ? $validated['name'] : $fake['name'],
+                        'document' => strlen($rawDoc) >= 11 ? $rawDoc : $fake['document'],
+                        'email' => $validated['email'],
+                    ];
+
                     $webhookUrl = route('webhooks.pushinpay');
                     $frequency = PushinPayPixRecorrenteService::intervalToFrequency($plan->interval ?? SubscriptionPlan::INTERVAL_MONTHLY);
                     $subscriptionName = mb_substr(preg_replace('/[^\p{L}\p{N}\s\.\-]/u', '', $product->name ?? 'Assinatura'), 0, 140) ?: 'Assinatura';
@@ -1195,27 +1206,28 @@ class CheckoutController extends Controller
                     return back()->withErrors(['payment_method' => 'Efí: certificado ou chave PIX não configurados.']);
                 }
 
-                $order = $createOrderAndItems(array_merge($orderPayload, [
-                    'status' => 'pending',
-                    'gateway' => null,
-                    'gateway_id' => null,
-                    'metadata' => array_merge($orderMetadata, ['checkout_payment_method' => 'pix_auto']),
-                ]));
-                $order->load('orderItems');
-                event(new OrderPending($order));
-
-                $base = 'pixauto' . $order->id;
-                $txid = $base . Str::random(max(26 - strlen($base), 10));
-                $txid = substr($txid, 0, 35);
-                $rawDoc = preg_replace('/\D/', '', $validated['cpf'] ?? '');
-                $fake = FakeConsumerData::getForGateway($order->id);
-                $consumer = [
-                    'name' => trim((string) ($validated['name'] ?? '')) !== '' ? $validated['name'] : $fake['name'],
-                    'document' => strlen($rawDoc) >= 11 ? $rawDoc : $fake['document'],
-                    'email' => $validated['email'],
-                ];
-
+                $order = null;
                 try {
+                    $order = $createOrderAndItems(array_merge($orderPayload, [
+                        'status' => 'pending',
+                        'gateway' => null,
+                        'gateway_id' => null,
+                        'metadata' => array_merge($orderMetadata, ['checkout_payment_method' => 'pix_auto']),
+                    ]));
+                    $order->load('orderItems');
+                    event(new OrderPending($order));
+
+                    $base = 'pixauto' . $order->id;
+                    $txid = $base . Str::random(max(26 - strlen($base), 10));
+                    $txid = substr($txid, 0, 35);
+                    $rawDoc = preg_replace('/\D/', '', $validated['cpf'] ?? '');
+                    $fake = FakeConsumerData::getForGateway($order->id);
+                    $consumer = [
+                        'name' => trim((string) ($validated['name'] ?? '')) !== '' ? $validated['name'] : $fake['name'],
+                        'document' => strlen($rawDoc) >= 11 ? $rawDoc : $fake['document'],
+                        'email' => $validated['email'],
+                    ];
+
                     $efiRecorrente = new EfiPixRecorrenteService($credentials);
                     $locRec = $efiRecorrente->createLocRec();
                     $locId = (int) $locRec['id'];
@@ -1489,15 +1501,16 @@ class CheckoutController extends Controller
         }
 
         if ($paymentMethod === 'boleto') {
-            $order = $createOrderAndItems(array_merge($orderPayload, [
-                'status' => 'pending',
-                'gateway' => null,
-                'gateway_id' => null,
-                'metadata' => array_merge($orderMetadata, ['checkout_payment_method' => 'boleto']),
-            ]));
-            $order->load('orderItems');
-            event(new OrderPending($order));
+            $order = null;
             try {
+                $order = $createOrderAndItems(array_merge($orderPayload, [
+                    'status' => 'pending',
+                    'gateway' => null,
+                    'gateway_id' => null,
+                    'metadata' => array_merge($orderMetadata, ['checkout_payment_method' => 'boleto']),
+                ]));
+                $order->load('orderItems');
+                event(new OrderPending($order));
                 $paymentService = app(PaymentService::class);
                 $fake = FakeConsumerData::getForGateway($order->id);
                 $rawDoc = preg_replace('/\D/', '', $validated['cpf'] ?? '');
@@ -2186,20 +2199,24 @@ class CheckoutController extends Controller
         if ($bumpIds) {
             $bumps = ProductOrderBump::where('product_id', $product->id)->whereIn('id', $bumpIds)->get();
             $pos = 1;
+            $hasBumpColumn = Schema::hasColumn('order_items', 'product_order_bump_id');
             foreach ($bumps as $bump) {
-                OrderItem::create([
+                $item = [
                     'order_id' => $order->id,
                     'product_id' => $bump->target_product_id,
                     'product_offer_id' => $bump->target_product_offer_id,
                     'subscription_plan_id' => $bump->target_subscription_plan_id,
-                    'product_order_bump_id' => $bump->id,
                     'amount' => CheckoutCustomPriceByCurrency::bumpBrlToChargeCurrency(
                         $bump->getEffectiveAmountBrl(),
                         $chargeCurrency,
                         $tenantCurrencies
                     ),
                     'position' => $pos++,
-                ]);
+                ];
+                if ($hasBumpColumn) {
+                    $item['product_order_bump_id'] = $bump->id;
+                }
+                OrderItem::create($item);
             }
         }
 
@@ -2369,16 +2386,20 @@ class CheckoutController extends Controller
             'position' => 0,
         ]);
         $pos = 1;
+        $hasBumpColumn = Schema::hasColumn('order_items', 'product_order_bump_id');
         foreach ($selectedBumps as $bump) {
-            OrderItem::create([
+            $item = [
                 'order_id' => $order->id,
                 'product_id' => $bump->target_product_id,
                 'product_offer_id' => $bump->target_product_offer_id,
                 'subscription_plan_id' => $bump->target_subscription_plan_id,
-                'product_order_bump_id' => $bump->id,
                 'amount' => $bump->getEffectiveAmountBrl(),
                 'position' => $pos++,
-            ]);
+            ];
+            if ($hasBumpColumn) {
+                $item['product_order_bump_id'] = $bump->id;
+            }
+            OrderItem::create($item);
         }
 
         $order->load('orderItems');
