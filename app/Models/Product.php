@@ -91,6 +91,9 @@ class Product extends Model
             'summary' => [
                 'previous_price' => null,
                 'discount_text' => '',
+                'show_description' => true,
+                'mobile_sticky_footer' => true,
+                'mobile_sticky_icon_url' => '',
             ],
             'appearance' => [
                 'background_color' => '#E3E3E3',

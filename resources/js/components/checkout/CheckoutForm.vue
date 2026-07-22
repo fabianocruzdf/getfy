@@ -9,6 +9,7 @@ import CheckoutDropdown from './CheckoutDropdown.vue';
 import CheckoutOrderBumps from './CheckoutOrderBumps.vue';
 import CheckoutCurrencyPicker from './CheckoutCurrencyPicker.vue';
 import CheckoutPaymentMethods from './CheckoutPaymentMethods.vue';
+import CheckoutPixInfo from './CheckoutPixInfo.vue';
 import AsaasCard from './gateways/asaas/Card.vue';
 import CajuPaySdkMount from './CajuPaySdkMount.vue';
 import CajuPayParceladoMount from './CajuPayParceladoMount.vue';
@@ -3195,6 +3196,12 @@ function submit() {
                 </template>
             </CheckoutPaymentMethods>
             <p v-if="form.errors.payment_method" class="text-sm font-medium text-red-600">{{ form.errors.payment_method }}</p>
+
+            <CheckoutPixInfo
+                v-if="isPixLike"
+                :primary-color="primaryColor"
+                :t="t"
+            />
 
             <!-- CajuPay SDK (Cartão / Apple Pay / Google Pay) -->
             <!-- Mesmo padrão visual do painel do Stripe: outer com border-2/bg-gray-50/50, header

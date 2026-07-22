@@ -77,6 +77,8 @@ const configForm = reactive({
         previous_price: props.config?.summary?.previous_price ?? null,
         discount_text: props.config?.summary?.discount_text ?? '',
         show_description: props.config?.summary?.show_description !== false,
+        mobile_sticky_footer: props.config?.summary?.mobile_sticky_footer !== false,
+        mobile_sticky_icon_url: props.config?.summary?.mobile_sticky_icon_url ?? '',
     },
     appearance: {
         background_color: props.config?.appearance?.background_color ?? '#E3E3E3',
@@ -597,6 +599,28 @@ const inputClass =
                                 v-model="configForm.summary.show_description"
                                 label="Exibir descrição do produto no resumo"
                             />
+                            <Toggle
+                                v-model="configForm.summary.mobile_sticky_footer"
+                                label="Resumo fixo no rodapé (somente mobile)"
+                            />
+                            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                                Mostra um resumo expansível do pedido fixo na parte inferior da tela em celulares.
+                            </p>
+                            <div v-show="configForm.summary.mobile_sticky_footer" class="space-y-2 rounded-xl border border-zinc-200 p-3 dark:border-zinc-700">
+                                <label class="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                                    Ícone do resumo (opcional)
+                                </label>
+                                <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                                    Sem imagem, usa o ícone padrão de sacola. Envie uma imagem quadrada para personalizar.
+                                </p>
+                                <ImageUpload
+                                    v-model="configForm.summary.mobile_sticky_icon_url"
+                                    :upload-url="uploadUrl"
+                                    label="Imagem do ícone"
+                                    recommended-size="128×128 px (quadrada)"
+                                    aspect-format="square"
+                                />
+                            </div>
                         </div>
                     </div>
                 </div>
