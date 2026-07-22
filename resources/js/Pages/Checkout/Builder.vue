@@ -95,6 +95,7 @@ const configForm = reactive({
     timer: {
         enabled: props.config?.timer?.enabled ?? false,
         text: props.config?.timer?.text ?? 'Esta oferta expira em:',
+        hours: props.config?.timer?.hours ?? 0,
         minutes: props.config?.timer?.minutes ?? 15,
         background_color: props.config?.timer?.background_color ?? '#000000',
         text_color: props.config?.timer?.text_color ?? '#FFFFFF',
@@ -769,11 +770,32 @@ const inputClass =
                                     <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Texto</label>
                                     <input v-model="configForm.timer.text" type="text" :class="inputClass" />
                                 </div>
-                                <div>
-                                    <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Tempo (minutos)</label>
-                                    <input v-model.number="configForm.timer.minutes" type="number" min="1" max="999" :class="inputClass" />
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Horas</label>
+                                        <input
+                                            v-model.number="configForm.timer.hours"
+                                            type="number"
+                                            min="0"
+                                            max="168"
+                                            :class="inputClass"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Minutos</label>
+                                        <input
+                                            v-model.number="configForm.timer.minutes"
+                                            type="number"
+                                            min="0"
+                                            max="999"
+                                            :class="inputClass"
+                                        />
+                                    </div>
                                 </div>
-                                <div class="grid grid-cols-2 gap-2">
+                                <p class="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                                    Ex.: 5 horas e 30 minutos. Se alterar o tempo, o cronômetro reinicia no checkout.
+                                </p>
+                                <div class="mt-3 grid grid-cols-2 gap-2">
                                     <div>
                                         <label class="mb-1 block text-xs text-zinc-500">Fundo</label>
                                         <input v-model="configForm.timer.background_color" type="color" class="h-9 w-full cursor-pointer rounded border" />

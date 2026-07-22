@@ -106,6 +106,7 @@ class Product extends Model
             'timer' => [
                 'enabled' => false,
                 'text' => 'Esta oferta expira em:',
+                'hours' => 0,
                 'minutes' => 15,
                 'background_color' => '#000000',
                 'text_color' => '#FFFFFF',
