@@ -569,42 +569,6 @@ const form = useForm({
 });
 
 const isPixLike = computed(() => form.payment_method === 'pix' || form.payment_method === 'pix_auto');
-const showPixProcessingHints = computed(() => isPixLike.value && form.processing);
-
-const pixProcessingMsgIdx = ref(0);
-let pixProcessingMsgTimer = null;
-
-const pixProcessingMessages = computed(() => {
-    const processing = tf('checkout.processing', 'Processando');
-    const secureEnv = tf('checkout.secure_env_loading', 'Carregando ambiente seguro');
-    return [processing, secureEnv].filter((s) => String(s || '').trim() !== '');
-});
-
-const pixProcessingMessage = computed(() => {
-    const msgs = pixProcessingMessages.value;
-    if (!msgs.length) return tf('checkout.processing', 'Processando...');
-    const idx = ((pixProcessingMsgIdx.value % msgs.length) + msgs.length) % msgs.length;
-    return msgs[idx];
-});
-
-watch(showPixProcessingHints, (enabled) => {
-    if (pixProcessingMsgTimer) {
-        clearInterval(pixProcessingMsgTimer);
-        pixProcessingMsgTimer = null;
-    }
-    pixProcessingMsgIdx.value = 0;
-    if (!enabled) return;
-    pixProcessingMsgTimer = setInterval(() => {
-        pixProcessingMsgIdx.value += 1;
-    }, 1300);
-});
-
-onBeforeUnmount(() => {
-    if (pixProcessingMsgTimer) {
-        clearInterval(pixProcessingMsgTimer);
-        pixProcessingMsgTimer = null;
-    }
-});
 
 const pagarmeBillingMode = computed(() => props.config?.pagarme_billing?.mode ?? 'customer');
 const isBoletoGatewayEfi = computed(() => boletoGatewaySlug.value === 'efi');
@@ -3752,17 +3716,6 @@ function submit() {
                 <ShoppingBag v-else class="h-5 w-5" />
                 <template v-if="cardApproved">
                     Aprovado!
-                </template>
-                <template v-else-if="showPixProcessingHints">
-                    <span class="inline-flex items-center gap-2">
-                        <Shield class="h-4 w-4 opacity-90" />
-                        <span class="relative">
-                            <span class="inline-block">{{ pixProcessingMessage }}</span>
-                            <span class="ml-1 inline-flex w-[1.2em] justify-start">
-                                <span class="animate-pulse">…</span>
-                            </span>
-                        </span>
-                    </span>
                 </template>
                 <template v-else-if="form.processing || cardTokenizing">
                     {{ t('checkout.processing') }}
