@@ -290,7 +290,8 @@ class VendasController extends Controller
                     'name' => $affiliate['name'],
                 ] : null;
                 try {
-                    $refundCheck = app(RefundService::class)->canRefundFromPanel($o);
+                    // Sem HTTP ao gateway na listagem (resolveGatewayPayment=false).
+                    $refundCheck = app(RefundService::class)->canRefundFromPanel($o, false);
                     $arr['can_refund'] = $refundCheck['can'];
                     $arr['refund_auto_cajupay_pix'] = $refundCheck['auto_cajupay_pix'];
                 } catch (\Throwable $e) {

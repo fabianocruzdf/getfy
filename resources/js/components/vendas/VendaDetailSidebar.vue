@@ -105,8 +105,8 @@ function itemLabel(item) {
 <template>
     <Teleport to="body">
         <div
-            v-show="open"
-            class="fixed inset-0 z-[100000] flex justify-end"
+            v-if="open"
+            class="fixed inset-0 z-[99990] flex justify-end"
             aria-modal="true"
             role="dialog"
         >
