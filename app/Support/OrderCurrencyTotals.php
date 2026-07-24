@@ -12,7 +12,9 @@ class OrderCurrencyTotals
     /**
      * Soma valores de pedidos completed agrupados por moeda (sem misturar moedas).
      *
-     * Agrega no SQL (1–2 queries) em vez de hidratar todos os pedidos completed em memória.
+     * Agrega no SQL em vez de hidratar todos os pedidos completed em memória.
+     * Usa subquery de IDs (sem join) para não ambigüizar colunas como product_id/tenant_id
+     * presentes no filtro da query original.
      *
      * @param  Builder<Order>  $statsQuery  Query já filtrada (tenant, período, etc.)
      * @return list<array{currency: string, total: float}>
@@ -24,19 +26,22 @@ class OrderCurrencyTotals
             ? "COALESCE(NULLIF(UPPER(TRIM(orders.currency)), ''), 'BRL')"
             : "'BRL'";
 
-        $perOrder = (clone $statsQuery)
+        // 1) Só IDs — sem JOIN (evita "ambiguous column name: product_id").
+        $idQuery = (clone $statsQuery)
             ->reorder()
             ->where('orders.status', 'completed');
 
-        // Evita SELECT * / ORDER BY / LIMIT herdados do clone (conflitam com GROUP BY).
-        $perOrder->getQuery()->columns = null;
-        $perOrder->getQuery()->groups = null;
-        $perOrder->getQuery()->orders = null;
-        $perOrder->getQuery()->limit = null;
-        $perOrder->getQuery()->offset = null;
-        $perOrder->getQuery()->unionOrders = null;
+        $idQuery->getQuery()->columns = null;
+        $idQuery->getQuery()->groups = null;
+        $idQuery->getQuery()->orders = null;
+        $idQuery->getQuery()->limit = null;
+        $idQuery->getQuery()->offset = null;
+        $idQuery->getQuery()->unionOrders = null;
+        $idQuery->select('orders.id');
 
-        $perOrder
+        // 2) Agrega totais por pedido + moeda (JOIN só aqui, sobre orders.id).
+        $perOrder = DB::table('orders')
+            ->whereIn('orders.id', $idQuery)
             ->leftJoin('order_items', 'order_items.order_id', '=', 'orders.id')
             ->selectRaw(
                 "orders.id as order_agg_id, {$currencyExpr} as currency_code, ".
@@ -45,7 +50,7 @@ class OrderCurrencyTotals
             ->groupByRaw($hasCurrencyColumn ? 'orders.id, orders.currency' : 'orders.id');
 
         $rows = DB::query()
-            ->fromSub($perOrder->toBase(), 'order_currency_totals')
+            ->fromSub($perOrder, 'order_currency_totals')
             ->selectRaw('currency_code, SUM(order_total) as total')
             ->groupBy('currency_code')
             ->orderBy('currency_code')

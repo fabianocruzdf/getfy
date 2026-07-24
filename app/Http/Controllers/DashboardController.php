@@ -49,7 +49,19 @@ class DashboardController extends Controller
         $ordersPending = (clone $ordersQuery)->where('status', 'pending');
         $ordersRefunded = (clone $ordersQuery)->where('status', 'refunded');
 
-        $vendasTotaisPorMoeda = OrderCurrencyTotals::valorPorMoedaFromQuery($ordersQuery);
+        $vendasTotaisPorMoeda = [];
+        try {
+            $vendasTotaisPorMoeda = OrderCurrencyTotals::valorPorMoedaFromQuery($ordersQuery);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('DashboardController valorPorMoeda', [
+                'message' => $e->getMessage(),
+                'tenant_id' => $tenantId,
+            ]);
+            $fallbackTotal = (float) (clone $ordersQuery)->where('status', 'completed')->sum('amount');
+            $vendasTotaisPorMoeda = $fallbackTotal > 0
+                ? [['currency' => 'BRL', 'total' => round($fallbackTotal, 2)]]
+                : [];
+        }
         $brlRow = collect($vendasTotaisPorMoeda)->firstWhere('currency', 'BRL');
         $vendasTotais = $brlRow ? (float) $brlRow['total'] : 0.0;
         $quantidadeVendas = $ordersCompleted->count();
