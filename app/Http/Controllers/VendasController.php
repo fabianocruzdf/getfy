@@ -158,7 +158,7 @@ class VendasController extends Controller
                         ->orWhereRaw("LOWER(gateway) LIKE '%cartao%'")
                         ->orWhereRaw("LOWER(gateway) LIKE '%cartão%'")
                         ->orWhereRaw("LOWER(gateway) LIKE '%credito%'")
-                        ->orWhereIn('metadata->checkout_payment_method', ['card', 'apple_pay', 'google_pay']);
+                        ->orWhereIn('metadata->checkout_payment_method', ['card', 'apple_pay', 'google_pay', 'paypal']);
                 });
             } elseif ($m === 'boleto') {
                 $query->where(function ($q) {
@@ -341,7 +341,7 @@ class VendasController extends Controller
                     ->orWhereRaw("LOWER(gateway) LIKE '%cartao%'")
                     ->orWhereRaw("LOWER(gateway) LIKE '%cartão%'")
                     ->orWhereRaw("LOWER(gateway) LIKE '%credito%'")
-                    ->orWhereIn('metadata->checkout_payment_method', ['card', 'apple_pay', 'google_pay']);
+                    ->orWhereIn('metadata->checkout_payment_method', ['card', 'apple_pay', 'google_pay', 'paypal']);
             })
             ->count();
 

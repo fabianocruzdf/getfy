@@ -76,6 +76,12 @@ const props = defineProps({
     card_mercadopago_public_key: { type: String, default: '' },
     /** Se o gateway Mercado Pago está em sandbox. */
     card_mercadopago_sandbox: { type: Boolean, default: false },
+    /** Client ID PayPal (Card Fields). */
+    card_paypal_client_id: { type: String, default: '' },
+    /** Se o gateway PayPal está em sandbox. */
+    card_paypal_sandbox: { type: Boolean, default: false },
+    /** Modo PayPal: auto | expanded | buttons */
+    card_paypal_checkout_mode: { type: String, default: 'auto' },
     /** Chaves por gateway slug para gateways de plugin (checkout_payload_keys na definição). Ex.: { 'meu-gateway': { publishable_key: '...' } } */
     card_gateway_keys: { type: Object, default: () => ({}) },
     subscription_plan: { type: Object, default: null },
@@ -899,6 +905,9 @@ const hasCustomBodyEnd = computed(() => String(customBodyEndHtml.value).trim() !
                             :card-max-installments="card_max_installments || 1"
                             :card-mercadopago-public-key="card_mercadopago_public_key || ''"
                             :card-mercadopago-sandbox="card_mercadopago_sandbox"
+                            :card-paypal-client-id="card_paypal_client_id || ''"
+                            :card-paypal-sandbox="card_paypal_sandbox"
+                            :card-paypal-checkout-mode="card_paypal_checkout_mode || 'auto'"
                             :card-gateway-keys="card_gateway_keys || {}"
                             :checkout-total-brl="checkoutTotalBrl"
                             :checkout-total-in-currency="checkoutTotalInCurrency"

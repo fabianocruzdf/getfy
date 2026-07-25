@@ -87,6 +87,10 @@ function buildCredentialInitial(keys, saved) {
         const v = saved[key];
         if (k.type === 'boolean') {
             initial[key] = v === true || v === '1' || v === 'true';
+        } else if (k.type === 'select') {
+            const str = v != null && v !== '' ? String(v) : '';
+            const fallback = k.options?.[0]?.value != null ? String(k.options[0].value) : '';
+            initial[key] = str || fallback;
         } else {
             const str = v != null && v !== '' ? String(v) : '';
             initial[key] = str;
@@ -680,6 +684,19 @@ const canTestConnection = computed(() => {
                                     <span class="text-sm text-zinc-600 dark:text-zinc-400">Sim (somente para testes)</span>
                                 </label>
                             </template>
+                            <select
+                                v-else-if="field.type === 'select'"
+                                v-model="credentialValues[field.key]"
+                                :class="inputClass"
+                            >
+                                <option
+                                    v-for="opt in (field.options || [])"
+                                    :key="String(opt.value ?? opt)"
+                                    :value="String(opt.value ?? opt)"
+                                >
+                                    {{ opt.label ?? opt.value ?? opt }}
+                                </option>
+                            </select>
                             <input
                                 v-else
                                 v-model="credentialValues[field.key]"

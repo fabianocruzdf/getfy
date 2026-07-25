@@ -22,6 +22,10 @@ $scriptSources = [
     'https://*.mlstatic.com',
     'https://checkout.pagar.me',
     'https://cdn.cajupay.com.br',
+    'https://www.paypal.com',
+    'https://www.sandbox.paypal.com',
+    'https://*.paypal.com',
+    'https://*.paypalobjects.com',
     // Analytics / pixels
     'https://connect.facebook.net',
     'https://www.googletagmanager.com',
@@ -43,6 +47,13 @@ $connectSources = [
     "'self'",
     // Stripe
     'https://api.stripe.com',
+    // PayPal
+    'https://www.paypal.com',
+    'https://www.sandbox.paypal.com',
+    'https://api-m.paypal.com',
+    'https://api-m.sandbox.paypal.com',
+    'https://*.paypal.com',
+    'https://*.paypalobjects.com',
     // Mercado Pago
     'https://api.mercadopago.com',
     'https://*.mercadopago.com',
@@ -93,6 +104,10 @@ $frameSources = [
     'https://js.stripe.com',
     'https://hooks.stripe.com',
     'https://m.stripe.network',
+    'https://www.paypal.com',
+    'https://www.sandbox.paypal.com',
+    'https://*.paypal.com',
+    'https://*.paypalobjects.com',
     'https://www.mercadopago.com',
     'https://*.mercadopago.com',
     'https://*.mercadopago.com.br',
