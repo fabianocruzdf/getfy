@@ -1721,6 +1721,8 @@ const paypalSdkError = ref('');
 const paypalPendingOrderId = ref(null);
 /** true depois que o formulário de cartão PayPal já abriu (createOrder ok) */
 const paypalCardFormReady = ref(false);
+/** true enquanto o createOrder abre o formulário de cartão (1º clique) */
+const paypalOpeningForm = ref(false);
 /** true enquanto captura/processa o pagamento (mostra loading) */
 const paypalProcessingPayment = ref(false);
 const paypalNameFieldRef = ref(null);
@@ -1729,37 +1731,7 @@ const paypalExpiryFieldRef = ref(null);
 const paypalCvvFieldRef = ref(null);
 const paypalButtonsContainerRef = ref(null);
 const paypalWalletContainerRef = ref(null);
-let paypalFormCollapseObserver = null;
 const paypalWalletButtons = ref(null);
-
-function stopPaypalFormCollapseWatch() {
-    if (paypalFormCollapseObserver) {
-        try {
-            paypalFormCollapseObserver.disconnect();
-        } catch (_) { /* ignore */ }
-        paypalFormCollapseObserver = null;
-    }
-}
-
-/** Quando o formulário expandido some (volta ao botão), mostra loading até aprovar/recusar. */
-function watchPaypalFormCollapse(container) {
-    stopPaypalFormCollapseWatch();
-    if (!container || typeof ResizeObserver === 'undefined') return;
-    let wasExpanded = false;
-    paypalFormCollapseObserver = new ResizeObserver(() => {
-        if (!paypalCardFormReady.value || cardApproved.value) return;
-        const h = container.offsetHeight;
-        if (h >= 160) {
-            wasExpanded = true;
-            return;
-        }
-        if (wasExpanded && h < 100 && !paypalProcessingPayment.value) {
-            paypalProcessingPayment.value = true;
-            cardTokenizing.value = true;
-        }
-    });
-    paypalFormCollapseObserver.observe(container);
-}
 
 const isPaypalButtonsMode = computed(
     () => isPaypalCheckout.value && paypalMode.value === 'buttons'
@@ -2002,7 +1974,6 @@ function destroyMercadopagoBrick() {
 }
 
 function destroyPaypalCheckout() {
-    stopPaypalFormCollapseWatch();
     try {
         const fields = paypalCardFields.value;
         if (fields && typeof fields.close === 'function') {
@@ -2028,6 +1999,7 @@ function destroyPaypalCheckout() {
     paypalSdkReady.value = false;
     paypalPendingOrderId.value = null;
     paypalCardFormReady.value = false;
+    paypalOpeningForm.value = false;
     paypalProcessingPayment.value = false;
     if (paypalButtonsContainerRef.value) {
         paypalButtonsContainerRef.value.innerHTML = '';
@@ -2174,26 +2146,40 @@ function showPaypalCheckoutError(err) {
     cardRefusedPrimaryLabel.value = rateLimited ? 'Entendi' : 'Tentar com outro cartão';
     showCardRefusedModal.value = true;
     cardTokenizing.value = false;
+    paypalOpeningForm.value = false;
     paypalProcessingPayment.value = false;
 }
 
 function paypalCreateOrderHandlers(mode) {
     return {
         createOrder: async () => {
-            if (!hasValidPaypalCheckoutEmail()) {
-                throw new Error('Preencha um e-mail válido antes de pagar.');
+            paypalOpeningForm.value = true;
+            paypalProcessingPayment.value = false;
+            try {
+                if (!hasValidPaypalCheckoutEmail()) {
+                    throw new Error('Preencha um e-mail válido antes de pagar.');
+                }
+                const result = await requestPaypalCreateOrder(mode);
+                paypalPendingOrderId.value = result.orderId;
+                // Formulário de cartão abre depois do createOrder
+                paypalCardFormReady.value = true;
+                return result.paypalOrderId;
+            } catch (err) {
+                paypalOpeningForm.value = false;
+                throw err;
+            } finally {
+                // Libera o loading de abertura após o PayPal montar o formulário
+                await nextTick();
+                setTimeout(() => {
+                    paypalOpeningForm.value = false;
+                }, 400);
             }
-            const result = await requestPaypalCreateOrder(mode);
-            paypalPendingOrderId.value = result.orderId;
-            // Formulário de cartão abre depois do createOrder
-            paypalCardFormReady.value = true;
-            return result.paypalOrderId;
         },
         onClick: (data, actions) => {
-            // 2º clique = confirmar pagamento (formulário já estava aberto)
-            if (paypalCardFormReady.value) {
-                paypalProcessingPayment.value = true;
-                cardTokenizing.value = true;
+            // 1º clique: abrir formulário (createOrder). Não marcar como "processando pagamento".
+            if (!paypalCardFormReady.value) {
+                paypalOpeningForm.value = true;
+                cardFormError.value = '';
             }
             return actions.resolve();
         },
@@ -2202,6 +2188,7 @@ function paypalCreateOrderHandlers(mode) {
             if (!orderID) {
                 throw new Error('Pedido PayPal inválido.');
             }
+            paypalOpeningForm.value = false;
             paypalProcessingPayment.value = true;
             cardTokenizing.value = true;
             try {
@@ -2246,6 +2233,7 @@ function paypalCreateOrderHandlers(mode) {
         },
         onCancel: () => {
             cardTokenizing.value = false;
+            paypalOpeningForm.value = false;
             paypalProcessingPayment.value = false;
         },
     };
@@ -2312,7 +2300,6 @@ async function renderPaypalButtonsWithPreference(paypal, handlersButtons, prefer
             await cardButtons.render(container);
             paypalButtons.value = cardButtons;
             paypalSdkReady.value = true;
-            watchPaypalFormCollapse(container);
             renderedCard = true;
         }
     }
@@ -3934,6 +3921,15 @@ function submit() {
                         </div>
                         <div v-show="paypalMode === 'buttons'" class="relative space-y-2">
                             <div
+                                v-if="paypalOpeningForm && !paypalProcessingPayment"
+                                class="mx-auto flex w-full max-w-sm items-center justify-center gap-2 rounded-xl border-2 border-gray-100 bg-white px-4 py-3 text-sm text-gray-700"
+                                role="status"
+                                aria-live="polite"
+                            >
+                                <Loader2 class="h-5 w-5 shrink-0 animate-spin" :style="{ color: primaryColor }" />
+                                <span>Abrindo formulário do cartão…</span>
+                            </div>
+                            <div
                                 ref="paypalButtonsContainerRef"
                                 class="mx-auto w-full max-w-sm min-h-[48px]"
                                 :class="paypalProcessingPayment ? 'pointer-events-none absolute opacity-0' : ''"
@@ -3950,7 +3946,7 @@ function submit() {
                             </div>
                         </div>
                         <div
-                            v-show="paypalShowWalletButton && !paypalProcessingPayment"
+                            v-show="paypalShowWalletButton && !paypalProcessingPayment && !paypalOpeningForm"
                             class="mx-auto w-full max-w-sm space-y-2 pt-2"
                         >
                             <p v-if="paypalMode === 'card_fields' || paypalMode === 'buttons'" class="text-center text-xs text-gray-500">ou</p>
