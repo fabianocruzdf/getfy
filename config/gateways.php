@@ -222,7 +222,7 @@ return [
                     'key' => 'webhook_id',
                     'label' => 'Webhook ID',
                     'type' => 'text',
-                    'hint' => 'Crie um webhook no Dashboard apontando para https://SEU_DOMINIO/webhooks/gateways/paypal e cole o Webhook ID aqui. Eventos: PAYMENT.CAPTURE.COMPLETED, PAYMENT.CAPTURE.DENIED, PAYMENT.CAPTURE.REFUNDED.',
+                    'hint' => 'No bloco Webhook acima, copie a URL e cadastre no PayPal Developer Dashboard. Depois cole aqui o Webhook ID gerado. Eventos: PAYMENT.CAPTURE.COMPLETED, PAYMENT.CAPTURE.DENIED, PAYMENT.CAPTURE.REFUNDED.',
                 ],
                 [
                     'key' => 'sandbox',

@@ -559,6 +559,14 @@ const canTestConnection = computed(() => {
                                 A CajuPay indica que o webhook pode estar incompleto. Salve as credenciais novamente ou use “Rotacionar token” na configuração avançada.
                             </p>
                         </template>
+                        <p v-else-if="gateway.slug === 'paypal'" class="mb-2 text-xs text-zinc-600 dark:text-zinc-400">
+                            Copie esta URL e cadastre como Webhook no
+                            <a href="https://developer.paypal.com/dashboard/webhooks" target="_blank" rel="noopener noreferrer" class="font-medium text-[var(--color-primary)] underline">PayPal Developer Dashboard</a>.
+                            Depois cole o Webhook ID no campo abaixo. Eventos:
+                            <code class="rounded bg-zinc-200 px-0.5 text-[11px] dark:bg-zinc-700">PAYMENT.CAPTURE.COMPLETED</code>,
+                            <code class="rounded bg-zinc-200 px-0.5 text-[11px] dark:bg-zinc-700">DENIED</code>,
+                            <code class="rounded bg-zinc-200 px-0.5 text-[11px] dark:bg-zinc-700">REFUNDED</code>.
+                        </p>
                         <p v-else class="mb-2 text-xs text-zinc-600 dark:text-zinc-400">
                             Configure esta URL no painel do {{ gateway.name }} (notificações de pagamento).
                         </p>

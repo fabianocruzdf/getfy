@@ -90,6 +90,8 @@ class GatewaysController extends Controller
             $webhookUrl = Route::has($webhookRoute) ? route($webhookRoute) : null;
         } elseif ($slug === 'cajupay' && Route::has('webhooks.cajupay')) {
             $webhookUrl = route('webhooks.cajupay');
+        } elseif ($slug === 'paypal' && Route::has('webhooks.paypal')) {
+            $webhookUrl = route('webhooks.paypal');
         }
 
         $usesOauth = ! empty($gateway['oauth']);
