@@ -2079,12 +2079,9 @@ class CheckoutController extends Controller
             ]));
             event(new OrderPending($order->fresh()));
         } else {
-            // Atualiza dados do comprador / valor se o checkout mudou
-            $order->fill([
-                'phone' => $validated['phone'] ?? $order->phone,
-                'cpf' => $validated['cpf'] ?? $order->cpf,
-                'amount' => (float) ($context['charge_amount'] ?? $order->amount),
-            ])->save();
+            // Reuso: sincroniza valor E itens (bumps/oferta/cupom). Só atualizar amount
+            // fazia o PayPal cobrar bumps sem gravar OrderItems / liberar acesso.
+            $this->syncPendingPaypalOrderWithCheckoutContext($order, $product, $context, $validated);
             $this->updateCheckoutSessionForOrder($order, array_merge($validated, [
                 'checkout_session_token' => $validated['checkout_session_token'] ?? null,
             ]));
@@ -2501,6 +2498,96 @@ class CheckoutController extends Controller
             'period_start' => $periodStart,
             'period_end' => $periodEnd,
         ];
+    }
+
+    /**
+     * Atualiza pedido PayPal pending reutilizado: comprador, totais e OrderItems (produto + bumps).
+     *
+     * @param  array<string, mixed>  $context  retorno de calculateOrderContext()
+     * @param  array<string, mixed>  $validated
+     */
+    private function syncPendingPaypalOrderWithCheckoutContext(
+        Order $order,
+        Product $product,
+        array $context,
+        array $validated
+    ): void {
+        $offer = $context['offer'] ?? null;
+        $plan = $context['plan'] ?? null;
+        $chargeCurrency = strtoupper((string) ($context['charge_currency'] ?? $order->currency ?? 'BRL'));
+        if (strlen($chargeCurrency) !== 3) {
+            $chargeCurrency = 'BRL';
+        }
+        $chargeAmount = (float) ($context['charge_amount'] ?? $order->amount);
+        $baseAmount = (float) ($context['base_amount'] ?? $chargeAmount);
+        $bumpIds = array_values(array_filter(array_map('intval', $context['order_bump_ids'] ?? [])));
+        $tenantId = $product->tenant_id;
+        $tenantCurrencies = $this->tenantCurrenciesListFor($tenantId);
+
+        $cpfDigits = array_key_exists('cpf', $validated)
+            ? (preg_replace('/\D/', '', (string) ($validated['cpf'] ?? '')) ?: null)
+            : $order->cpf;
+
+        $meta = is_array($order->metadata) ? $order->metadata : [];
+        if ($chargeCurrency !== 'BRL') {
+            $amountBrl = OrderReportingAmounts::estimateAmountBrl($chargeAmount, $chargeCurrency, $tenantId);
+            if ($amountBrl !== null && $amountBrl > 0) {
+                $meta['amount_brl'] = $amountBrl;
+            }
+        } else {
+            unset($meta['amount_brl']);
+        }
+
+        $order->fill([
+            'phone' => $validated['phone'] ?? $order->phone,
+            'cpf' => $cpfDigits,
+            'amount' => $chargeAmount,
+            'currency' => $chargeCurrency,
+            'product_offer_id' => $offer?->id,
+            'subscription_plan_id' => $plan?->id,
+            'period_start' => $context['period_start'] ?? $order->period_start,
+            'period_end' => $context['period_end'] ?? $order->period_end,
+            'coupon_code' => $context['coupon_code'] ?? null,
+            'metadata' => $meta,
+        ])->save();
+
+        $order->orderItems()->delete();
+
+        OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $product->id,
+            'product_offer_id' => $offer?->id,
+            'subscription_plan_id' => $plan?->id,
+            'amount' => $baseAmount,
+            'position' => 0,
+        ]);
+
+        if ($bumpIds !== []) {
+            $bumps = ProductOrderBump::where('product_id', $product->id)->whereIn('id', $bumpIds)->get();
+            $pos = 1;
+            $hasBumpColumn = Schema::hasColumn('order_items', 'product_order_bump_id');
+            foreach ($bumps as $bump) {
+                $item = [
+                    'order_id' => $order->id,
+                    'product_id' => $bump->target_product_id,
+                    'product_offer_id' => $bump->target_product_offer_id,
+                    'subscription_plan_id' => $bump->target_subscription_plan_id,
+                    'amount' => CheckoutCustomPriceByCurrency::bumpBrlToChargeCurrency(
+                        $bump->getEffectiveAmountBrl(),
+                        $chargeCurrency,
+                        $tenantCurrencies
+                    ),
+                    'position' => $pos++,
+                ];
+                if ($hasBumpColumn) {
+                    $item['product_order_bump_id'] = $bump->id;
+                }
+                OrderItem::create($item);
+            }
+        }
+
+        $order->unsetRelation('orderItems');
+        $order->load('orderItems');
     }
 
     /**
