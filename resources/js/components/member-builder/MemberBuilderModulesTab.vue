@@ -37,6 +37,7 @@ const props = defineProps({
     editingModuleReleaseMode: { type: String, default: 'none' },
     editingModuleReleaseAfterDays: { type: String, default: '' },
     editingModuleReleaseAtDate: { type: String, default: '' },
+    editingModuleAccessDurationDays: { type: String, default: '' },
     editingModuleThumbnail: { type: String, default: null },
     moduleThumbnailUploading: { type: Boolean, default: false },
 });
@@ -82,6 +83,7 @@ const emit = defineEmits([
     'update:editingModuleReleaseMode',
     'update:editingModuleReleaseAfterDays',
     'update:editingModuleReleaseAtDate',
+    'update:editingModuleAccessDurationDays',
 ]);
 
 const mobileStep = ref('sections');
@@ -412,6 +414,7 @@ const columnClass = (step) => [
                         :editing-release-mode="editingModuleReleaseMode"
                         :editing-release-after-days="editingModuleReleaseAfterDays"
                         :editing-release-at-date="editingModuleReleaseAtDate"
+                        :editing-access-duration-days="editingModuleAccessDurationDays"
                         :editing-thumbnail="editingModuleThumbnail"
                         :thumbnail-uploading="moduleThumbnailUploading"
                         @update:editing-title="emit('update:editingModuleTitle', $event)"
@@ -422,6 +425,7 @@ const columnClass = (step) => [
                         @update:editing-release-mode="emit('update:editingModuleReleaseMode', $event)"
                         @update:editing-release-after-days="emit('update:editingModuleReleaseAfterDays', $event)"
                         @update:editing-release-at-date="emit('update:editingModuleReleaseAtDate', $event)"
+                        @update:editing-access-duration-days="emit('update:editingModuleAccessDurationDays', $event)"
                         @save="emit('save-module')"
                         @pick-thumbnail="emit('pick-module-thumbnail')"
                         @remove-thumbnail="emit('remove-module-thumbnail')"

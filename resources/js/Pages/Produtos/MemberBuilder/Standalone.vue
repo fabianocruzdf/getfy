@@ -679,6 +679,7 @@ function openModulosLessonForm(lesson) {
             release_mode: lesson.release_at_date ? 'date' : (lesson.release_after_days ? 'days' : 'none'),
             release_after_days: lesson.release_after_days ? String(lesson.release_after_days) : '',
             release_at_date: lesson.release_at_date || '',
+            access_duration_days: lesson.access_duration_days ? String(lesson.access_duration_days) : '',
         };
     } else {
         modulosLessonForm.value = {
@@ -694,6 +695,7 @@ function openModulosLessonForm(lesson) {
             release_mode: 'none',
             release_after_days: '',
             release_at_date: '',
+            access_duration_days: '',
         };
     }
 }
@@ -822,6 +824,7 @@ function lessonPayload(form) {
     const firstFileUrl = contentFiles[0]?.url ?? '';
     let release_after_days = null;
     let release_at_date = null;
+    const accessDurationDays = parseInt(form.access_duration_days, 10);
     if (form.release_mode === 'days') {
         const days = parseInt(form.release_after_days, 10);
         release_after_days = Number.isFinite(days) && days > 0 ? days : null;
@@ -838,6 +841,7 @@ function lessonPayload(form) {
         useful_links: usefulLinks,
         release_after_days,
         release_at_date,
+        access_duration_days: Number.isFinite(accessDurationDays) && accessDurationDays > 0 ? accessDurationDays : null,
         content_text: form.content_text ?? '',
         duration_seconds: 0,
         is_free: false,
@@ -919,6 +923,7 @@ const editingModuleExternalUrl = ref('');
 const editingModuleReleaseMode = ref('none'); // none | days | date
 const editingModuleReleaseAfterDays = ref('');
 const editingModuleReleaseAtDate = ref('');
+const editingModuleAccessDurationDays = ref('');
 
 const sectionModalOpen = ref(false);
 const sectionModalTitle = ref('');
@@ -942,6 +947,7 @@ const moduleModalExternalUrl = ref('');
 const moduleModalReleaseMode = ref('none'); // none | days | date
 const moduleModalReleaseAfterDays = ref('');
 const moduleModalReleaseAtDate = ref('');
+const moduleModalAccessDurationDays = ref('');
 
 function openSectionEdit(section) {
     editingSectionTitle.value = section.title;
@@ -981,6 +987,7 @@ function openModuleEdit(mod) {
         editingModuleReleaseAfterDays.value = '';
         editingModuleReleaseAtDate.value = '';
     }
+    editingModuleAccessDurationDays.value = mod.access_duration_days ? String(mod.access_duration_days) : '';
     startEditModule(mod.id);
 }
 
@@ -992,6 +999,8 @@ async function saveModuleTitle() {
     const payload = { title: editingModuleTitle.value };
     if (sectionType === 'courses') {
         payload.show_title_on_cover = editingModuleShowTitleOnCover.value;
+        const accessDurationDays = parseInt(editingModuleAccessDurationDays.value, 10);
+        payload.access_duration_days = Number.isFinite(accessDurationDays) && accessDurationDays > 0 ? accessDurationDays : null;
         if (editingModuleReleaseMode.value === 'days') {
             const days = parseInt(editingModuleReleaseAfterDays.value, 10);
             payload.release_after_days = Number.isFinite(days) && days > 0 ? days : null;
@@ -1517,6 +1526,7 @@ function openModuleModal(sectionId) {
     moduleModalReleaseMode.value = 'none';
     moduleModalReleaseAfterDays.value = '';
     moduleModalReleaseAtDate.value = '';
+    moduleModalAccessDurationDays.value = '';
     clearModuleModalFile();
     moduleModalOpen.value = true;
 }
@@ -1555,6 +1565,8 @@ async function confirmNewModule() {
         let payload = { title };
         if (sectionType === 'courses') {
             payload.show_title_on_cover = moduleModalShowTitleOnCover.value;
+            const accessDurationDays = parseInt(moduleModalAccessDurationDays.value, 10);
+            payload.access_duration_days = Number.isFinite(accessDurationDays) && accessDurationDays > 0 ? accessDurationDays : null;
             if (moduleModalReleaseMode.value === 'days') {
                 const days = parseInt(moduleModalReleaseAfterDays.value, 10);
                 payload.release_after_days = Number.isFinite(days) && days > 0 ? days : null;
@@ -2409,6 +2421,7 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                             :editing-module-release-mode="editingModuleReleaseMode"
                             :editing-module-release-after-days="editingModuleReleaseAfterDays"
                             :editing-module-release-at-date="editingModuleReleaseAtDate"
+                            :editing-module-access-duration-days="editingModuleAccessDurationDays"
                             :editing-module-thumbnail="editingModule?.thumbnail"
                             :module-thumbnail-uploading="moduleThumbnailUploading"
                             @open-section-modal="openSectionModal"
@@ -2451,6 +2464,7 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                             @update:editing-module-release-mode="editingModuleReleaseMode = $event"
                             @update:editing-module-release-after-days="editingModuleReleaseAfterDays = $event"
                             @update:editing-module-release-at-date="editingModuleReleaseAtDate = $event"
+                            @update:editing-module-access-duration-days="editingModuleAccessDurationDays = $event"
                         />
                     </template>
 
@@ -3275,6 +3289,22 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                     />
                                     <div v-else class="hidden sm:block" />
                                 </div>
+                            </div>
+                            <div>
+                                <label class="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Duração do acesso</label>
+                                <input
+                                    v-model="moduleModalAccessDurationDays"
+                                    type="number"
+                                    min="1"
+                                    max="3650"
+                                    step="1"
+                                    :class="inputClass"
+                                    class="w-full"
+                                    placeholder="Ilimitado"
+                                />
+                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                    Em dias após a compra. Deixe vazio para acesso ilimitado.
+                                </p>
                             </div>
                             <div>
                                 <label class="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Capa — {{ moduleModalCoverMode === 'horizontal' ? 'banner' : 'vertical' }}</label>

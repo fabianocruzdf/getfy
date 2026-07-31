@@ -212,6 +212,7 @@ class MemberBuilderController extends Controller
                         'show_title_on_cover' => $m->show_title_on_cover ?? true,
                         'release_after_days' => $m->release_after_days,
                         'release_at_date' => $m->release_at_date?->format('Y-m-d'),
+                        'access_duration_days' => $m->access_duration_days,
                         'lessons' => $m->lessons->map(fn (MemberLesson $l) => [
                             'id' => $l->id,
                             'title' => $l->title,
@@ -224,6 +225,7 @@ class MemberBuilderController extends Controller
                             'useful_links' => $l->useful_links,
                             'release_after_days' => $l->release_after_days,
                             'release_at_date' => $l->release_at_date?->format('Y-m-d'),
+                            'access_duration_days' => $l->access_duration_days,
                             'content_text' => \App\Support\HtmlSanitizer::sanitize($l->content_text),
                             'duration_seconds' => $l->duration_seconds,
                             'is_free' => $l->is_free,
@@ -782,6 +784,7 @@ class MemberBuilderController extends Controller
                 'show_title_on_cover' => ['nullable', 'boolean'],
                 'release_after_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
                 'release_at_date' => ['nullable', 'date_format:Y-m-d'],
+                'access_duration_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
             ]);
             if (! empty($validated['release_at_date'] ?? null)) {
                 $validated['release_after_days'] = null;
@@ -800,6 +803,7 @@ class MemberBuilderController extends Controller
                 'show_title_on_cover' => $validated['show_title_on_cover'] ?? true,
                 'release_after_days' => $validated['release_after_days'] ?? null,
                 'release_at_date' => $validated['release_at_date'] ?? null,
+                'access_duration_days' => $validated['access_duration_days'] ?? null,
             ]);
         } elseif ($sectionType === 'products') {
             $validated = $request->validate([
@@ -929,12 +933,16 @@ class MemberBuilderController extends Controller
             'show_title_on_cover' => $module->show_title_on_cover ?? true,
             'release_after_days' => $module->release_after_days,
             'release_at_date' => $module->release_at_date?->format('Y-m-d'),
+            'access_duration_days' => $module->access_duration_days,
             'lessons' => $module->relationLoaded('lessons') ? $module->lessons->map(fn (MemberLesson $l) => [
                 'id' => $l->id,
                 'title' => $l->title,
                 'position' => $l->position,
                 'type' => $l->type,
                 'content_url' => $l->content_url,
+                'release_after_days' => $l->release_after_days,
+                'release_at_date' => $l->release_at_date?->format('Y-m-d'),
+                'access_duration_days' => $l->access_duration_days,
                 'content_text' => \App\Support\HtmlSanitizer::sanitize($l->content_text),
                 'duration_seconds' => $l->duration_seconds,
                 'is_free' => $l->is_free,
@@ -976,6 +984,7 @@ class MemberBuilderController extends Controller
                 'show_title_on_cover' => ['sometimes', 'boolean'],
                 'release_after_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
                 'release_at_date' => ['nullable', 'date_format:Y-m-d'],
+                'access_duration_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
             ]);
             if (array_key_exists('release_at_date', $validated) || array_key_exists('release_after_days', $validated)) {
                 $date = $validated['release_at_date'] ?? null;
@@ -1101,6 +1110,7 @@ class MemberBuilderController extends Controller
             'useful_links.*.url' => ['nullable', 'string', 'max:2000', new StorageOrHttpUrl()],
             'release_after_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
             'release_at_date' => ['nullable', 'date_format:Y-m-d'],
+            'access_duration_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
             'content_text' => ['nullable', 'string'],
             'duration_seconds' => ['nullable', 'integer', 'min:0'],
             'is_free' => ['boolean'],
@@ -1137,6 +1147,7 @@ class MemberBuilderController extends Controller
             'useful_links' => $usefulLinks !== [] ? $usefulLinks : null,
             'release_after_days' => $validated['release_after_days'] ?? null,
             'release_at_date' => $validated['release_at_date'] ?? null,
+            'access_duration_days' => $validated['access_duration_days'] ?? null,
             'content_text' => $validated['content_text'] ?? null,
             'duration_seconds' => $validated['duration_seconds'] ?? null,
             'is_free' => $request->boolean('is_free', false),
@@ -1183,6 +1194,7 @@ class MemberBuilderController extends Controller
             'useful_links.*.url' => ['nullable', 'string', 'max:2000', new StorageOrHttpUrl()],
             'release_after_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
             'release_at_date' => ['nullable', 'date_format:Y-m-d'],
+            'access_duration_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
             'content_text' => ['nullable', 'string'],
             'duration_seconds' => ['nullable', 'integer', 'min:0'],
             'is_free' => ['boolean'],
@@ -1839,6 +1851,7 @@ class MemberBuilderController extends Controller
             'external_url' => $source->external_url,
             'release_after_days' => $source->release_after_days,
             'release_at_date' => $source->release_at_date,
+            'access_duration_days' => $source->access_duration_days,
         ]);
 
         $shouldCopyLessons = $copyLessons
@@ -1878,6 +1891,7 @@ class MemberBuilderController extends Controller
             'useful_links' => $source->useful_links,
             'release_after_days' => $source->release_after_days,
             'release_at_date' => $source->release_at_date,
+            'access_duration_days' => $source->access_duration_days,
             'content_text' => $source->content_text,
             'duration_seconds' => $source->duration_seconds,
             'is_free' => (bool) $source->is_free,
@@ -1902,6 +1916,7 @@ class MemberBuilderController extends Controller
             'useful_links' => $lesson->useful_links,
             'release_after_days' => $lesson->release_after_days,
             'release_at_date' => $lesson->release_at_date?->format('Y-m-d'),
+            'access_duration_days' => $lesson->access_duration_days,
             'content_text' => \App\Support\HtmlSanitizer::sanitize($lesson->content_text),
             'duration_seconds' => $lesson->duration_seconds,
             'is_free' => (bool) $lesson->is_free,
@@ -1924,6 +1939,7 @@ class MemberBuilderController extends Controller
             'show_title_on_cover' => $module->show_title_on_cover ?? true,
             'release_after_days' => $module->release_after_days,
             'release_at_date' => $module->release_at_date?->format('Y-m-d'),
+            'access_duration_days' => $module->access_duration_days,
             'lessons' => $module->lessons->map(fn (MemberLesson $l) => $this->serializeMemberLessonForBuilder($l))->values()->all(),
         ];
 
