@@ -59,4 +59,9 @@ class MemberModule extends Model
     {
         return $this->hasMany(MemberLesson::class, 'member_module_id')->orderBy('position');
     }
+
+    public function releaseDependencies(): HasMany
+    {
+        return $this->hasMany(MemberModuleReleaseDependency::class, 'member_module_id');
+    }
 }

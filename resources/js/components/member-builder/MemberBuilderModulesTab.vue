@@ -21,6 +21,7 @@ const props = defineProps({
     sectionTypeLabel: { type: Function, required: true },
     lessonForm: { type: Object, default: null },
     lessonFormSaving: { type: Boolean, default: false },
+    moduleFormSaving: { type: Boolean, default: false },
     lessonPdfUploading: { type: Boolean, default: false },
     lessonSupportUploading: { type: Boolean, default: false },
     isLessonPdfContentType: { type: Function, required: true },
@@ -38,6 +39,9 @@ const props = defineProps({
     editingModuleReleaseAfterDays: { type: String, default: '' },
     editingModuleReleaseAtDate: { type: String, default: '' },
     editingModuleAccessDurationDays: { type: String, default: '' },
+    editingModuleRequiresPreviousModules: { type: Boolean, default: false },
+    editingModuleReleaseDependencies: { type: Array, default: () => [] },
+    editingModuleReleaseDependencyOptions: { type: Array, default: () => [] },
     editingModuleThumbnail: { type: String, default: null },
     moduleThumbnailUploading: { type: Boolean, default: false },
 });
@@ -84,6 +88,8 @@ const emit = defineEmits([
     'update:editingModuleReleaseAfterDays',
     'update:editingModuleReleaseAtDate',
     'update:editingModuleAccessDurationDays',
+    'update:editingModuleRequiresPreviousModules',
+    'update:editingModuleReleaseDependencies',
 ]);
 
 const mobileStep = ref('sections');
@@ -415,8 +421,12 @@ const columnClass = (step) => [
                         :editing-release-after-days="editingModuleReleaseAfterDays"
                         :editing-release-at-date="editingModuleReleaseAtDate"
                         :editing-access-duration-days="editingModuleAccessDurationDays"
+                        :editing-requires-previous-modules="editingModuleRequiresPreviousModules"
+                        :editing-release-dependencies="editingModuleReleaseDependencies"
+                        :editing-release-dependency-options="editingModuleReleaseDependencyOptions"
                         :editing-thumbnail="editingModuleThumbnail"
                         :thumbnail-uploading="moduleThumbnailUploading"
+                        :saving="moduleFormSaving"
                         @update:editing-title="emit('update:editingModuleTitle', $event)"
                         @update:editing-show-title-on-cover="emit('update:editingModuleShowTitleOnCover', $event)"
                         @update:editing-related-product-id="emit('update:editingModuleRelatedProductId', $event)"
@@ -426,6 +436,8 @@ const columnClass = (step) => [
                         @update:editing-release-after-days="emit('update:editingModuleReleaseAfterDays', $event)"
                         @update:editing-release-at-date="emit('update:editingModuleReleaseAtDate', $event)"
                         @update:editing-access-duration-days="emit('update:editingModuleAccessDurationDays', $event)"
+                        @update:editing-requires-previous-modules="emit('update:editingModuleRequiresPreviousModules', $event)"
+                        @update:editing-release-dependencies="emit('update:editingModuleReleaseDependencies', $event)"
                         @save="emit('save-module')"
                         @pick-thumbnail="emit('pick-module-thumbnail')"
                         @remove-thumbnail="emit('remove-module-thumbnail')"
