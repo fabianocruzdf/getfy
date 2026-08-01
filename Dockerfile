@@ -6,7 +6,7 @@ RUN apk add --no-cache --virtual .build-deps \
     libzip-dev libpng-dev oniguruma-dev icu-dev libxml2-dev \
     && pecl install redis \
     && docker-php-ext-enable redis \
-    && docker-php-ext-install -j"$(nproc)" pdo_mysql zip exif intl opcache pcntl bcmath \
+    && docker-php-ext-install -j"$(nproc)" pdo_mysql zip exif gd intl opcache pcntl bcmath \
     && mkdir -p /export-inis \
     && cp /usr/local/etc/php/conf.d/docker-php-ext-*.ini /export-inis/ \
     && apk del .build-deps \
