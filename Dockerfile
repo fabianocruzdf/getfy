@@ -31,6 +31,19 @@ COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html
 
+FROM node:22-alpine AS frontend_builder
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY vite.config.js ./
+COPY resources ./resources
+COPY public ./public
+
+RUN npm run build
+
 FROM php_runtime AS app
 
 COPY docker/php/conf.d/99-getfy-uploads.ini /usr/local/etc/php/conf.d/99-getfy-uploads.ini
@@ -38,6 +51,7 @@ COPY docker/php-fpm.d/zz-getfy.conf /usr/local/etc/php-fpm.d/zz-getfy.conf
 COPY docker/nginx/getfy.conf /etc/nginx/http.d/default.conf
 COPY docker/supervisord.conf /etc/supervisord.conf
 COPY . .
+COPY --from=frontend_builder /app/public/build ./public/build
 COPY docker/entrypoint.sh /usr/local/bin/getfy-entrypoint
 
 RUN chmod +x /usr/local/bin/getfy-entrypoint \
