@@ -13,7 +13,7 @@ class MetaConversionsApiService
     private const GRAPH_VERSION = 'v21.0';
 
     /**
-     * Envia Purchase (e opcionalmente um segundo evento só para order bumps) via CAPI.
+     * Envia um único Purchase via CAPI (valor = total do pedido, ou só o principal se disable_order_bump_events).
      */
     public function sendPurchaseForCompletedOrder(Order $order): void
     {

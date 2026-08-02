@@ -45,10 +45,16 @@ class UtmifySendOrderJob implements ShouldQueue
         }
 
         try {
-            $utmifyService->sendOrder($order, $this->utmifyStatus, $integration->api_key, [
-                'approved_at' => $this->approvedAt,
-                'refunded_at' => $this->refundedAt,
-            ]);
+            $utmifyService->sendOrder(
+                $order,
+                $this->utmifyStatus,
+                $integration->api_key,
+                [
+                    'approved_at' => $this->approvedAt,
+                    'refunded_at' => $this->refundedAt,
+                ],
+                $integration->productIdsForPayloadFilter()
+            );
         } catch (\Throwable $e) {
             // Falha na UTMfy não pode interromper checkout, webhooks nem outros fluxos (ex.: credencial inválida 404).
             Log::warning('UtmifySendOrderJob failed', [

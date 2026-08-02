@@ -125,4 +125,47 @@ class OrderReportingAmounts
 
         return max(1, (int) round($totalCents * ($lineAmount / $linesTotal)));
     }
+
+    /**
+     * Rateio proporcional de várias linhas que soma exatamente totalCentsBrl (último item absorve o resto).
+     *
+     * @param  array<int, float>  $lineAmounts
+     * @return array<int, int>
+     */
+    public static function allocateLineCentsBrl(Order $order, array $lineAmounts): array
+    {
+        $count = count($lineAmounts);
+        if ($count === 0) {
+            return [];
+        }
+
+        $totalCents = self::totalCentsBrl($order);
+        $linesTotal = round(array_sum($lineAmounts), 2);
+
+        if ($linesTotal <= 0) {
+            $out = array_fill(0, $count, 0);
+            $out[0] = $totalCents;
+
+            return $out;
+        }
+
+        $allocated = [];
+        $sum = 0;
+        foreach ($lineAmounts as $i => $lineAmount) {
+            $amount = (float) $lineAmount;
+            if ($i === $count - 1) {
+                $allocated[] = max(0, $totalCents - $sum);
+                continue;
+            }
+            if ($amount <= 0) {
+                $allocated[] = 0;
+                continue;
+            }
+            $cents = max(1, (int) round($totalCents * ($amount / $linesTotal)));
+            $allocated[] = $cents;
+            $sum += $cents;
+        }
+
+        return $allocated;
+    }
 }

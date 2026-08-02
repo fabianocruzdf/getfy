@@ -6,6 +6,7 @@ use App\Events\OrderCompleted;
 use App\Jobs\SendMetaPurchaseCapiJob;
 use App\Jobs\UtmifySendOrderJob;
 use App\Models\Order;
+use App\Models\OrderItem;
 use App\Models\UtmifyIntegration;
 use App\Models\User;
 use App\Services\MetaConversionsApiService;
@@ -116,6 +117,136 @@ class OrderCompletedTrackingTest extends TestCase
 
             return str_contains($request->url(), 'api.utmify.com.br')
                 && ($body['status'] ?? '') === 'paid';
+        });
+    }
+
+    public function test_utmify_send_order_job_posts_separate_payloads_for_order_bumps(): void
+    {
+        Http::fake([
+            'https://api.utmify.com.br/*' => Http::response([], 200),
+        ]);
+
+        $user = User::factory()->create(['tenant_id' => 1]);
+        $main = $this->createTestProduct(['name' => 'Main Tracking']);
+        $bump = $this->createTestProduct(['name' => 'Bump Tracking']);
+
+        $order = Order::create([
+            'tenant_id' => 1,
+            'user_id' => $user->id,
+            'product_id' => $main->id,
+            'status' => 'completed',
+            'amount' => 81.90,
+            'currency' => 'BRL',
+            'email' => 'utmify-split-job@example.com',
+            'gateway_id' => 'gw-split-job',
+            'metadata' => ['checkout_payment_method' => 'pix'],
+        ]);
+
+        OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $main->id,
+            'amount' => 67.00,
+            'position' => 0,
+        ]);
+        $bumpItem = OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $bump->id,
+            'amount' => 14.90,
+            'position' => 1,
+        ]);
+
+        $integration = UtmifyIntegration::create([
+            'tenant_id' => 1,
+            'name' => 'UTMify split',
+            'api_key' => 'utmify_test_key',
+            'is_active' => true,
+        ]);
+
+        $job = new UtmifySendOrderJob(
+            $integration->id,
+            $order->id,
+            'paid',
+            now()->utc()->format('Y-m-d H:i:s'),
+            null
+        );
+        $job->handle(app(\App\Services\UtmifyService::class));
+
+        Http::assertSentCount(2);
+
+        Http::assertSent(function ($request) {
+            $body = $request->data();
+
+            return ($body['orderId'] ?? '') === 'gw-split-job'
+                && ($body['commission']['totalPriceInCents'] ?? 0) === 6700
+                && count($body['products'] ?? []) === 1;
+        });
+
+        Http::assertSent(function ($request) use ($bumpItem) {
+            $body = $request->data();
+
+            return ($body['orderId'] ?? '') === 'gw-split-job-ob-'.$bumpItem->id
+                && ($body['commission']['totalPriceInCents'] ?? 0) === 1490
+                && count($body['products'] ?? []) === 1;
+        });
+    }
+
+    public function test_utmify_send_order_job_filters_linked_product_only(): void
+    {
+        Http::fake([
+            'https://api.utmify.com.br/*' => Http::response([], 200),
+        ]);
+
+        $user = User::factory()->create(['tenant_id' => 1]);
+        $main = $this->createTestProduct(['name' => 'Main Filter Job']);
+        $bump = $this->createTestProduct(['name' => 'Bump Filter Job']);
+
+        $order = Order::create([
+            'tenant_id' => 1,
+            'user_id' => $user->id,
+            'product_id' => $main->id,
+            'status' => 'completed',
+            'amount' => 81.90,
+            'currency' => 'BRL',
+            'email' => 'utmify-filter-job@example.com',
+            'gateway_id' => 'gw-filter-job',
+        ]);
+
+        OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $main->id,
+            'amount' => 67.00,
+            'position' => 0,
+        ]);
+        $bumpItem = OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $bump->id,
+            'amount' => 14.90,
+            'position' => 1,
+        ]);
+
+        $integration = UtmifyIntegration::create([
+            'tenant_id' => 1,
+            'name' => 'UTMify bump only',
+            'api_key' => 'utmify_test_key',
+            'is_active' => true,
+        ]);
+        $integration->products()->sync([$bump->id]);
+
+        $job = new UtmifySendOrderJob(
+            $integration->id,
+            $order->id,
+            'paid',
+            now()->utc()->format('Y-m-d H:i:s'),
+            null
+        );
+        $job->handle(app(\App\Services\UtmifyService::class));
+
+        Http::assertSentCount(1);
+        Http::assertSent(function ($request) use ($bumpItem) {
+            $body = $request->data();
+
+            return ($body['orderId'] ?? '') === 'gw-filter-job-ob-'.$bumpItem->id
+                && ($body['commission']['totalPriceInCents'] ?? 0) === 1490;
         });
     }
 

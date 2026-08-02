@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\ApiCheckoutSession;
 use App\Models\CheckoutSession;
 use App\Models\Order;
+use App\Models\OrderItem;
 use App\Support\OrderReportingAmounts;
 use Illuminate\Support\Facades\Http;
 
@@ -13,27 +14,63 @@ class UtmifyService
     private const ENDPOINT = 'https://api.utmify.com.br/api-credentials/orders';
 
     /**
-     * Build payload and send order to UTMfy API.
+     * Build payload(s) and send order line(s) to UTMfy API (1 POST per product / order bump).
      *
-     * @param  array{approved_at?: string|null, refunded_at?: string|null}  $options
+     * @param  array{approved_at?: string|null, refunded_at?: string|null, is_test?: bool}  $options
+     * @param  array<int, string>|null  $onlyProductIds  When set, only lines whose product_id is in this list are sent.
      */
     public function sendOrder(
         Order $order,
         string $utmifyStatus,
         string $apiKey,
-        array $options = []
+        array $options = [],
+        ?array $onlyProductIds = null
     ): void {
-        $body = $this->buildPayload($order, $utmifyStatus, $options);
-        $this->post($apiKey, $body);
+        foreach ($this->buildPayloads($order, $utmifyStatus, $options, $onlyProductIds) as $body) {
+            $this->post($apiKey, $body);
+        }
     }
 
     /**
+     * Single payload (first line). Prefer {@see buildPayloads} for multi-item orders.
+     *
      * @param  array{approved_at?: string|null, refunded_at?: string|null, is_test?: bool}  $options
+     * @param  array<int, string>|null  $onlyProductIds
      * @return array<string, mixed>
      */
-    public function buildPayload(Order $order, string $utmifyStatus, array $options = []): array
-    {
-        $order->loadMissing(['user', 'orderItems.product', 'orderItems.productOffer', 'orderItems.subscriptionPlan']);
+    public function buildPayload(
+        Order $order,
+        string $utmifyStatus,
+        array $options = [],
+        ?array $onlyProductIds = null
+    ): array {
+        $payloads = $this->buildPayloads($order, $utmifyStatus, $options, $onlyProductIds);
+        if ($payloads !== []) {
+            return $payloads[0];
+        }
+
+        // Filtro por produto sem linhas correspondentes: não inventar payload com o total do funil.
+        if ($onlyProductIds !== null) {
+            return [];
+        }
+
+        return $this->emptyFallbackPayload($order, $utmifyStatus, $options);
+    }
+
+    /**
+     * One UTMfy order body per order line (main + each bump), each with its own commission.
+     *
+     * @param  array{approved_at?: string|null, refunded_at?: string|null, is_test?: bool}  $options
+     * @param  array<int, string>|null  $onlyProductIds
+     * @return array<int, array<string, mixed>>
+     */
+    public function buildPayloads(
+        Order $order,
+        string $utmifyStatus,
+        array $options = [],
+        ?array $onlyProductIds = null
+    ): array {
+        $order->loadMissing(['user', 'product', 'orderItems.product', 'orderItems.productOffer', 'orderItems.subscriptionPlan']);
 
         $session = CheckoutSession::where('order_id', $order->id)->orderByDesc('id')->first();
         $apiSession = null;
@@ -46,9 +83,8 @@ class UtmifyService
             }
         }
 
-        $orderId = $order->gateway_id ?: (string) $order->id;
+        $baseOrderId = $order->gateway_id ?: (string) $order->id;
         $paymentMethod = $this->mapPaymentMethod($order);
-        $totalCentsBrl = OrderReportingAmounts::totalCentsBrl($order);
         $createdAt = $order->created_at->utc()->format('Y-m-d H:i:s');
         $approvedDate = $options['approved_at'] ?? ($utmifyStatus === 'paid' ? $order->updated_at->utc()->format('Y-m-d H:i:s') : null);
         $refundedAt = $options['refunded_at'] ?? null;
@@ -69,8 +105,63 @@ class UtmifyService
             'ip' => $order->customer_ip ?? '',
         ];
 
-        $products = [];
-        foreach ($order->orderItems as $item) {
+        $apiMeta = $apiSession?->metadata;
+        $apiMeta = is_array($apiMeta) ? $apiMeta : [];
+        $trackingParameters = $this->buildMergedTrackingParameters($session, $apiMeta, $order);
+
+        $filterIds = null;
+        if ($onlyProductIds !== null) {
+            $filterIds = array_values(array_unique(array_map(
+                static fn ($id) => (string) $id,
+                $onlyProductIds
+            )));
+        }
+
+        $allItems = $order->orderItems;
+        if ($allItems->isEmpty()) {
+            $totalCentsBrl = OrderReportingAmounts::totalCentsBrl($order);
+            $mainProduct = $order->product;
+            $productId = (string) ($mainProduct?->id ?? $order->product_id ?? '');
+            if ($filterIds !== null && ($productId === '' || ! in_array($productId, $filterIds, true))) {
+                return [];
+            }
+
+            $body = $this->makeBody(
+                orderId: $baseOrderId,
+                paymentMethod: $paymentMethod,
+                utmifyStatus: $utmifyStatus,
+                createdAt: $createdAt,
+                approvedDate: $approvedDate,
+                refundedAt: $refundedAt,
+                customer: $customer,
+                products: [[
+                    'id' => $productId !== '' ? $productId : (string) ($order->product_id ?? '0'),
+                    'name' => $mainProduct?->name ?? 'Produto',
+                    'planId' => null,
+                    'planName' => null,
+                    'quantity' => 1,
+                    'priceInCents' => $totalCentsBrl,
+                ]],
+                trackingParameters: $trackingParameters,
+                commissionCents: $totalCentsBrl,
+                isTest: ! empty($options['is_test'])
+            );
+
+            return [$body];
+        }
+
+        // Rateio sempre sobre o pedido completo; o filtro só decide quais linhas enviar.
+        $lineAmounts = $allItems->map(fn (OrderItem $item) => (float) $item->amount)->all();
+        $lineCents = OrderReportingAmounts::allocateLineCentsBrl($order, $lineAmounts);
+
+        $payloads = [];
+        foreach ($allItems as $index => $item) {
+            /** @var OrderItem $item */
+            $productId = (string) ($item->product_id ?? '');
+            if ($filterIds !== null && ! in_array($productId, $filterIds, true)) {
+                continue;
+            }
+
             $product = $item->product;
             $planId = $item->product_offer_id ?? $item->subscription_plan_id;
             $planName = null;
@@ -79,58 +170,36 @@ class UtmifyService
             } elseif ($item->subscriptionPlan) {
                 $planName = $item->subscriptionPlan->name;
             }
-            $products[] = [
-                'id' => (string) ($product?->id ?? $item->product_id ?? $item->id),
-                'name' => $product?->name ?? 'Produto',
-                'planId' => $planId ? (string) $planId : null,
-                'planName' => $planName,
-                'quantity' => 1,
-                'priceInCents' => OrderReportingAmounts::lineCentsBrl($order, (float) $item->amount),
-            ];
+
+            $cents = (int) ($lineCents[$index] ?? 0);
+            $isMainLine = (int) ($item->position ?? 0) === 0;
+            $utmifyOrderId = $isMainLine
+                ? $baseOrderId
+                : $baseOrderId.'-ob-'.$item->id;
+
+            $payloads[] = $this->makeBody(
+                orderId: $utmifyOrderId,
+                paymentMethod: $paymentMethod,
+                utmifyStatus: $utmifyStatus,
+                createdAt: $createdAt,
+                approvedDate: $approvedDate,
+                refundedAt: $refundedAt,
+                customer: $customer,
+                products: [[
+                    'id' => (string) ($product?->id ?? $item->product_id ?? $item->id),
+                    'name' => $product?->name ?? 'Produto',
+                    'planId' => $planId ? (string) $planId : null,
+                    'planName' => $planName,
+                    'quantity' => 1,
+                    'priceInCents' => $cents,
+                ]],
+                trackingParameters: $trackingParameters,
+                commissionCents: $cents,
+                isTest: ! empty($options['is_test'])
+            );
         }
 
-        if (empty($products)) {
-            $mainProduct = $order->product;
-            $products[] = [
-                'id' => (string) ($mainProduct?->id ?? $order->product_id),
-                'name' => $mainProduct?->name ?? 'Produto',
-                'planId' => null,
-                'planName' => null,
-                'quantity' => 1,
-                'priceInCents' => $totalCentsBrl,
-            ];
-        }
-
-        $apiMeta = $apiSession?->metadata;
-        $apiMeta = is_array($apiMeta) ? $apiMeta : [];
-
-        $trackingParameters = $this->buildMergedTrackingParameters($session, $apiMeta, $order);
-
-        $commission = [
-            'totalPriceInCents' => $totalCentsBrl,
-            'gatewayFeeInCents' => 0,
-            'userCommissionInCents' => $totalCentsBrl,
-        ];
-
-        $body = [
-            'orderId' => $orderId,
-            'platform' => 'Primicia',
-            'paymentMethod' => $paymentMethod,
-            'status' => $utmifyStatus,
-            'createdAt' => $createdAt,
-            'approvedDate' => $approvedDate,
-            'refundedAt' => $refundedAt,
-            'customer' => $customer,
-            'products' => $products,
-            'trackingParameters' => $trackingParameters,
-            'commission' => $commission,
-        ];
-
-        if (! empty($options['is_test'])) {
-            $body['isTest'] = true;
-        }
-
-        return $body;
+        return $payloads;
     }
 
     /**
@@ -144,11 +213,93 @@ class UtmifyService
 
         if (! $response->successful()) {
             throw new \RuntimeException(
-                'UTMfy API error: ' . $response->status() . ' ' . $response->body()
+                'UTMfy API error: '.$response->status().' '.$response->body()
             );
         }
 
         return $response;
+    }
+
+    /**
+     * @param  array<string, mixed>  $customer
+     * @param  array<int, array<string, mixed>>  $products
+     * @param  array<string, string|null>  $trackingParameters
+     * @return array<string, mixed>
+     */
+    private function makeBody(
+        string $orderId,
+        string $paymentMethod,
+        string $utmifyStatus,
+        string $createdAt,
+        ?string $approvedDate,
+        ?string $refundedAt,
+        array $customer,
+        array $products,
+        array $trackingParameters,
+        int $commissionCents,
+        bool $isTest
+    ): array {
+        $body = [
+            'orderId' => $orderId,
+            'platform' => 'Primicia',
+            'paymentMethod' => $paymentMethod,
+            'status' => $utmifyStatus,
+            'createdAt' => $createdAt,
+            'approvedDate' => $approvedDate,
+            'refundedAt' => $refundedAt,
+            'customer' => $customer,
+            'products' => $products,
+            'trackingParameters' => $trackingParameters,
+            'commission' => [
+                'totalPriceInCents' => $commissionCents,
+                'gatewayFeeInCents' => 0,
+                'userCommissionInCents' => $commissionCents,
+            ],
+        ];
+
+        if ($isTest) {
+            $body['isTest'] = true;
+        }
+
+        return $body;
+    }
+
+    /**
+     * @param  array{approved_at?: string|null, refunded_at?: string|null, is_test?: bool}  $options
+     * @return array<string, mixed>
+     */
+    private function emptyFallbackPayload(Order $order, string $utmifyStatus, array $options): array
+    {
+        $totalCentsBrl = OrderReportingAmounts::totalCentsBrl($order);
+        $createdAt = $order->created_at?->utc()->format('Y-m-d H:i:s') ?? now()->utc()->format('Y-m-d H:i:s');
+
+        return $this->makeBody(
+            orderId: $order->gateway_id ?: (string) $order->id,
+            paymentMethod: $this->mapPaymentMethod($order),
+            utmifyStatus: $utmifyStatus,
+            createdAt: $createdAt,
+            approvedDate: $options['approved_at'] ?? ($utmifyStatus === 'paid' ? ($order->updated_at?->utc()->format('Y-m-d H:i:s')) : null),
+            refundedAt: $options['refunded_at'] ?? null,
+            customer: [
+                'name' => $order->user?->name ?? '',
+                'email' => $order->email ?? '',
+                'phone' => $order->phone ?? '',
+                'document' => $order->cpf ?? '',
+                'country' => 'BR',
+                'ip' => $order->customer_ip ?? '',
+            ],
+            products: [[
+                'id' => (string) ($order->product_id ?? '0'),
+                'name' => 'Produto',
+                'planId' => null,
+                'planName' => null,
+                'quantity' => 1,
+                'priceInCents' => $totalCentsBrl,
+            ]],
+            trackingParameters: $this->buildMergedTrackingParameters(null, [], $order),
+            commissionCents: $totalCentsBrl,
+            isTest: ! empty($options['is_test'])
+        );
     }
 
     /**

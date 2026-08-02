@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Models\Order;
+use App\Models\OrderItem;
 use App\Models\Setting;
 use App\Models\User;
 use App\Services\UtmifyService;
@@ -221,5 +222,146 @@ class OrderReportingAmountsTest extends TestCase
         ]);
 
         $this->assertSame(2850, OrderReportingAmounts::totalCentsBrl($order));
+    }
+
+    public function test_utmify_payloads_split_main_and_order_bump_with_individual_commissions(): void
+    {
+        $user = User::factory()->create();
+        $main = $this->createTestProduct(['name' => 'Principal']);
+        $bumpProduct = $this->createTestProduct(['name' => 'Order Bump Extra']);
+
+        $order = Order::create([
+            'tenant_id' => 1,
+            'user_id' => $user->id,
+            'product_id' => $main->id,
+            'status' => 'completed',
+            'amount' => 81.90,
+            'currency' => 'BRL',
+            'email' => 'utmify-bump@example.com',
+            'gateway_id' => 'gw-order-123',
+            'metadata' => ['checkout_payment_method' => 'pix'],
+        ]);
+
+        OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $main->id,
+            'amount' => 67.00,
+            'position' => 0,
+        ]);
+        $bumpItem = OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $bumpProduct->id,
+            'amount' => 14.90,
+            'position' => 1,
+        ]);
+
+        $payloads = app(UtmifyService::class)->buildPayloads($order->fresh(), 'paid');
+
+        $this->assertCount(2, $payloads);
+
+        $this->assertSame('gw-order-123', $payloads[0]['orderId']);
+        $this->assertSame(6700, $payloads[0]['commission']['totalPriceInCents']);
+        $this->assertSame(6700, $payloads[0]['products'][0]['priceInCents']);
+        $this->assertSame((string) $main->id, $payloads[0]['products'][0]['id']);
+        $this->assertCount(1, $payloads[0]['products']);
+
+        $this->assertSame('gw-order-123-ob-'.$bumpItem->id, $payloads[1]['orderId']);
+        $this->assertSame(1490, $payloads[1]['commission']['totalPriceInCents']);
+        $this->assertSame(1490, $payloads[1]['products'][0]['priceInCents']);
+        $this->assertSame((string) $bumpProduct->id, $payloads[1]['products'][0]['id']);
+        $this->assertCount(1, $payloads[1]['products']);
+
+        $this->assertSame(
+            8190,
+            $payloads[0]['commission']['totalPriceInCents'] + $payloads[1]['commission']['totalPriceInCents']
+        );
+    }
+
+    public function test_utmify_payloads_filter_by_product_keeps_line_amount_not_funnel_total(): void
+    {
+        $user = User::factory()->create();
+        $main = $this->createTestProduct(['name' => 'Principal filtro']);
+        $bumpProduct = $this->createTestProduct(['name' => 'Bump filtro']);
+
+        $order = Order::create([
+            'tenant_id' => 1,
+            'user_id' => $user->id,
+            'product_id' => $main->id,
+            'status' => 'completed',
+            'amount' => 81.90,
+            'currency' => 'BRL',
+            'email' => 'utmify-filter@example.com',
+            'gateway_id' => 'gw-filter-1',
+        ]);
+
+        OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $main->id,
+            'amount' => 67.00,
+            'position' => 0,
+        ]);
+        $bumpItem = OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $bumpProduct->id,
+            'amount' => 14.90,
+            'position' => 1,
+        ]);
+
+        $payloads = app(UtmifyService::class)->buildPayloads(
+            $order->fresh(),
+            'paid',
+            [],
+            [(string) $bumpProduct->id]
+        );
+
+        $this->assertCount(1, $payloads);
+        $this->assertSame('gw-filter-1-ob-'.$bumpItem->id, $payloads[0]['orderId']);
+        $this->assertSame(1490, $payloads[0]['commission']['totalPriceInCents']);
+        $this->assertSame(1490, $payloads[0]['products'][0]['priceInCents']);
+        $this->assertSame((string) $bumpProduct->id, $payloads[0]['products'][0]['id']);
+    }
+
+    public function test_utmify_payloads_fallback_without_order_items_uses_total(): void
+    {
+        $user = User::factory()->create();
+        $product = $this->createTestProduct(['name' => 'Só principal']);
+
+        $order = Order::create([
+            'tenant_id' => 1,
+            'user_id' => $user->id,
+            'product_id' => $product->id,
+            'status' => 'completed',
+            'amount' => 97.00,
+            'currency' => 'BRL',
+            'email' => 'utmify-no-items@example.com',
+        ]);
+
+        $payloads = app(UtmifyService::class)->buildPayloads($order, 'paid');
+
+        $this->assertCount(1, $payloads);
+        $this->assertSame(9700, $payloads[0]['commission']['totalPriceInCents']);
+        $this->assertSame(9700, $payloads[0]['products'][0]['priceInCents']);
+        $this->assertSame((string) $product->id, $payloads[0]['products'][0]['id']);
+    }
+
+    public function test_allocate_line_cents_brl_sums_to_total(): void
+    {
+        $user = User::factory()->create();
+        $product = $this->createTestProduct();
+
+        $order = Order::create([
+            'tenant_id' => 1,
+            'user_id' => $user->id,
+            'product_id' => $product->id,
+            'status' => 'completed',
+            'amount' => 100.00,
+            'currency' => 'BRL',
+            'email' => 'allocate@example.com',
+        ]);
+
+        $allocated = OrderReportingAmounts::allocateLineCentsBrl($order, [33.33, 33.33, 33.34]);
+
+        $this->assertSame(10000, array_sum($allocated));
+        $this->assertCount(3, $allocated);
     }
 }

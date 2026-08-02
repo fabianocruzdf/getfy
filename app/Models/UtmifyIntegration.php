@@ -53,13 +53,25 @@ class UtmifyIntegration extends Model
      *
      * @return array<int, string>
      */
-    private function linkedProductIdsNormalized(): array
+    public function linkedProductIdsNormalized(): array
     {
         if ($this->relationLoaded('products')) {
             return $this->products->pluck('id')->map(fn ($id) => (string) $id)->unique()->values()->all();
         }
 
         return $this->products()->pluck('id')->map(fn ($id) => (string) $id)->unique()->values()->all();
+    }
+
+    /**
+     * Product IDs to filter UTMfy line payloads. Null = send all lines (no product restriction).
+     *
+     * @return array<int, string>|null
+     */
+    public function productIdsForPayloadFilter(): ?array
+    {
+        $linked = $this->linkedProductIdsNormalized();
+
+        return $linked === [] ? null : $linked;
     }
 
     /**
