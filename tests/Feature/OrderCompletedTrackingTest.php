@@ -250,6 +250,65 @@ class OrderCompletedTrackingTest extends TestCase
         });
     }
 
+    public function test_utmify_send_order_job_main_product_link_includes_bumps(): void
+    {
+        Http::fake([
+            'https://api.utmify.com.br/*' => Http::response([], 200),
+        ]);
+
+        $user = User::factory()->create(['tenant_id' => 1]);
+        $main = $this->createTestProduct(['name' => 'Main Linked Only']);
+        $bump = $this->createTestProduct(['name' => 'Bump Not Linked']);
+
+        $order = Order::create([
+            'tenant_id' => 1,
+            'user_id' => $user->id,
+            'product_id' => $main->id,
+            'status' => 'completed',
+            'amount' => 81.90,
+            'currency' => 'BRL',
+            'email' => 'utmify-main-linked@example.com',
+            'gateway_id' => 'gw-main-linked',
+        ]);
+
+        OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $main->id,
+            'amount' => 67.00,
+            'position' => 0,
+        ]);
+        $bumpItem = OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $bump->id,
+            'amount' => 14.90,
+            'position' => 1,
+        ]);
+
+        $integration = UtmifyIntegration::create([
+            'tenant_id' => 1,
+            'name' => 'UTMify main only linked',
+            'api_key' => 'utmify_test_key',
+            'is_active' => true,
+        ]);
+        // Caso real do cliente: só o produto do checkout principal está marcado.
+        $integration->products()->sync([$main->id]);
+
+        $job = new UtmifySendOrderJob(
+            $integration->id,
+            $order->id,
+            'paid',
+            now()->utc()->format('Y-m-d H:i:s'),
+            null
+        );
+        $job->handle(app(\App\Services\UtmifyService::class));
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request) => ($request->data()['orderId'] ?? '') === 'gw-main-linked'
+            && ($request->data()['commission']['totalPriceInCents'] ?? 0) === 6700);
+        Http::assertSent(fn ($request) => ($request->data()['orderId'] ?? '') === 'gw-main-linked-ob-'.$bumpItem->id
+            && ($request->data()['commission']['totalPriceInCents'] ?? 0) === 1490);
+    }
+
     public function test_order_completed_dispatches_utmify_after_response_when_sync_queue(): void
     {
         Bus::fake();

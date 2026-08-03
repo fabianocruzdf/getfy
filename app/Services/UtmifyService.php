@@ -8,6 +8,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Support\OrderReportingAmounts;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class UtmifyService
 {
@@ -17,7 +18,7 @@ class UtmifyService
      * Build payload(s) and send order line(s) to UTMfy API (1 POST per product / order bump).
      *
      * @param  array{approved_at?: string|null, refunded_at?: string|null, is_test?: bool}  $options
-     * @param  array<int, string>|null  $onlyProductIds  When set, only lines whose product_id is in this list are sent.
+     * @param  array<int, string>|null  $onlyProductIds  When set, restricts which lines to send (see buildPayloads).
      */
     public function sendOrder(
         Order $order,
@@ -26,8 +27,34 @@ class UtmifyService
         array $options = [],
         ?array $onlyProductIds = null
     ): void {
-        foreach ($this->buildPayloads($order, $utmifyStatus, $options, $onlyProductIds) as $body) {
-            $this->post($apiKey, $body);
+        $payloads = $this->buildPayloads($order, $utmifyStatus, $options, $onlyProductIds);
+        if ($payloads === []) {
+            return;
+        }
+
+        $errors = [];
+        foreach ($payloads as $body) {
+            try {
+                $this->post($apiKey, $body);
+            } catch (\Throwable $e) {
+                $errors[] = [
+                    'orderId' => $body['orderId'] ?? null,
+                    'message' => $e->getMessage(),
+                ];
+                Log::warning('UtmifyService line post failed', [
+                    'getfy_order_id' => $order->id,
+                    'utmify_order_id' => $body['orderId'] ?? null,
+                    'status' => $utmifyStatus,
+                    'message' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        if ($errors !== []) {
+            throw new \RuntimeException(
+                'UTMfy API error on '.count($errors).'/'.count($payloads).' payload(s): '
+                .json_encode($errors, JSON_UNESCAPED_UNICODE)
+            );
         }
     }
 
@@ -60,6 +87,12 @@ class UtmifyService
     /**
      * One UTMfy order body per order line (main + each bump), each with its own commission.
      *
+     * Product filter semantics (produtos atribuídos na integração):
+     * - null / vazio → todas as linhas
+     * - produto da linha está no filtro → envia a linha
+     * - produto principal do pedido (checkout) está no filtro → envia TODAS as linhas
+     *   (order bumps do mesmo checkout entram mesmo sem o produto do bump estar marcado)
+     *
      * @param  array{approved_at?: string|null, refunded_at?: string|null, is_test?: bool}  $options
      * @param  array<int, string>|null  $onlyProductIds
      * @return array<int, array<string, mixed>>
@@ -83,7 +116,7 @@ class UtmifyService
             }
         }
 
-        $baseOrderId = $order->gateway_id ?: (string) $order->id;
+        $baseOrderId = $this->baseUtmifyOrderId($order);
         $paymentMethod = $this->mapPaymentMethod($order);
         $createdAt = $order->created_at->utc()->format('Y-m-d H:i:s');
         $approvedDate = $options['approved_at'] ?? ($utmifyStatus === 'paid' ? $order->updated_at->utc()->format('Y-m-d H:i:s') : null);
@@ -111,18 +144,24 @@ class UtmifyService
 
         $filterIds = null;
         if ($onlyProductIds !== null) {
-            $filterIds = array_values(array_unique(array_map(
-                static fn ($id) => (string) $id,
-                $onlyProductIds
+            $filterIds = array_values(array_unique(array_filter(
+                array_map(static fn ($id) => (string) $id, $onlyProductIds),
+                static fn (string $id) => $id !== ''
             )));
+            if ($filterIds === []) {
+                $filterIds = null;
+            }
         }
+
+        $checkoutMainLinked = $filterIds !== null
+            && in_array((string) ($order->product_id ?? ''), $filterIds, true);
 
         $allItems = $order->orderItems;
         if ($allItems->isEmpty()) {
             $totalCentsBrl = OrderReportingAmounts::totalCentsBrl($order);
             $mainProduct = $order->product;
             $productId = (string) ($mainProduct?->id ?? $order->product_id ?? '');
-            if ($filterIds !== null && ($productId === '' || ! in_array($productId, $filterIds, true))) {
+            if ($filterIds !== null && ! $checkoutMainLinked && ($productId === '' || ! in_array($productId, $filterIds, true))) {
                 return [];
             }
 
@@ -151,14 +190,16 @@ class UtmifyService
         }
 
         // Rateio sempre sobre o pedido completo; o filtro só decide quais linhas enviar.
-        $lineAmounts = $allItems->map(fn (OrderItem $item) => (float) $item->amount)->all();
+        $lineAmounts = $allItems->map(fn (OrderItem $item) => (float) $item->amount)->values()->all();
         $lineCents = OrderReportingAmounts::allocateLineCentsBrl($order, $lineAmounts);
 
         $payloads = [];
-        foreach ($allItems as $index => $item) {
+        foreach ($allItems->values() as $index => $item) {
             /** @var OrderItem $item */
             $productId = (string) ($item->product_id ?? '');
-            if ($filterIds !== null && ! in_array($productId, $filterIds, true)) {
+            if ($filterIds !== null
+                && ! $checkoutMainLinked
+                && ! in_array($productId, $filterIds, true)) {
                 continue;
             }
 
@@ -172,10 +213,12 @@ class UtmifyService
             }
 
             $cents = (int) ($lineCents[$index] ?? 0);
-            $isMainLine = (int) ($item->position ?? 0) === 0;
-            $utmifyOrderId = $isMainLine
-                ? $baseOrderId
-                : $baseOrderId.'-ob-'.$item->id;
+            // Evita rejeição da API quando commission / preço ficam zerados.
+            if ($cents <= 0) {
+                $cents = max(1, OrderReportingAmounts::lineCentsBrl($order, (float) $item->amount));
+            }
+
+            $utmifyOrderId = $this->utmifyOrderIdForLine($baseOrderId, $item);
 
             $payloads[] = $this->makeBody(
                 orderId: $utmifyOrderId,
@@ -218,6 +261,31 @@ class UtmifyService
         }
 
         return $response;
+    }
+
+    /**
+     * orderId estável do pedido principal na UTMfy.
+     */
+    public function baseUtmifyOrderId(Order $order): string
+    {
+        $gatewayId = trim((string) ($order->gateway_id ?? ''));
+
+        return $gatewayId !== '' ? $gatewayId : (string) $order->id;
+    }
+
+    /**
+     * orderId por linha: principal usa o id base; bumps usam sufixo estável.
+     */
+    public function utmifyOrderIdForLine(string $baseOrderId, OrderItem $item): string
+    {
+        $isMainLine = (int) ($item->position ?? 0) === 0;
+        if ($isMainLine) {
+            return $baseOrderId;
+        }
+
+        $suffix = $item->id ?: ('p'.$item->position);
+
+        return $baseOrderId.'-ob-'.$suffix;
     }
 
     /**
@@ -274,7 +342,7 @@ class UtmifyService
         $createdAt = $order->created_at?->utc()->format('Y-m-d H:i:s') ?? now()->utc()->format('Y-m-d H:i:s');
 
         return $this->makeBody(
-            orderId: $order->gateway_id ?: (string) $order->id,
+            orderId: $this->baseUtmifyOrderId($order),
             paymentMethod: $this->mapPaymentMethod($order),
             utmifyStatus: $utmifyStatus,
             createdAt: $createdAt,

@@ -321,6 +321,52 @@ class OrderReportingAmountsTest extends TestCase
         $this->assertSame((string) $bumpProduct->id, $payloads[0]['products'][0]['id']);
     }
 
+    public function test_utmify_payloads_main_product_filter_includes_order_bumps(): void
+    {
+        $user = User::factory()->create();
+        $main = $this->createTestProduct(['name' => 'Checkout principal']);
+        $bumpProduct = $this->createTestProduct(['name' => 'Bump do checkout']);
+
+        $order = Order::create([
+            'tenant_id' => 1,
+            'user_id' => $user->id,
+            'product_id' => $main->id,
+            'status' => 'completed',
+            'amount' => 81.90,
+            'currency' => 'BRL',
+            'email' => 'utmify-main-filter@example.com',
+            'gateway_id' => 'gw-main-filter',
+        ]);
+
+        OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $main->id,
+            'amount' => 67.00,
+            'position' => 0,
+        ]);
+        $bumpItem = OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $bumpProduct->id,
+            'amount' => 14.90,
+            'position' => 1,
+        ]);
+
+        // Integração com apenas o produto principal marcado — bumps do mesmo checkout devem ir juntos.
+        $payloads = app(UtmifyService::class)->buildPayloads(
+            $order->fresh(),
+            'paid',
+            [],
+            [(string) $main->id]
+        );
+
+        $this->assertCount(2, $payloads);
+        $this->assertSame('gw-main-filter', $payloads[0]['orderId']);
+        $this->assertSame(6700, $payloads[0]['commission']['totalPriceInCents']);
+        $this->assertSame('gw-main-filter-ob-'.$bumpItem->id, $payloads[1]['orderId']);
+        $this->assertSame(1490, $payloads[1]['commission']['totalPriceInCents']);
+        $this->assertSame((string) $bumpProduct->id, $payloads[1]['products'][0]['id']);
+    }
+
     public function test_utmify_payloads_fallback_without_order_items_uses_total(): void
     {
         $user = User::factory()->create();
