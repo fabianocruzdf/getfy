@@ -51,6 +51,9 @@ COPY docker/php-fpm.d/zz-getfy.conf /usr/local/etc/php-fpm.d/zz-getfy.conf
 COPY docker/nginx/getfy.conf /etc/nginx/http.d/default.conf
 COPY docker/supervisord.conf /etc/supervisord.conf
 COPY . .
+
+RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-scripts
+
 COPY --from=frontend_builder /app/public/build ./public/build
 COPY docker/entrypoint.sh /usr/local/bin/getfy-entrypoint
 
