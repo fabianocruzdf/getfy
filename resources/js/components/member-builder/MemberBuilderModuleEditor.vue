@@ -17,6 +17,7 @@ defineProps({
     editingReleaseMode: { type: String, default: 'none' },
     editingReleaseAfterDays: { type: String, default: '' },
     editingReleaseAtDate: { type: String, default: '' },
+    editingAccessDurationDays: { type: String, default: '' },
     editingThumbnail: { type: String, default: null },
     thumbnailUploading: { type: Boolean, default: false },
 });
@@ -30,6 +31,7 @@ const emit = defineEmits([
     'update:editingReleaseMode',
     'update:editingReleaseAfterDays',
     'update:editingReleaseAtDate',
+    'update:editingAccessDurationDays',
     'save',
     'pick-thumbnail',
     'remove-thumbnail',
@@ -129,6 +131,22 @@ const emit = defineEmits([
                         @input="emit('update:editingReleaseAtDate', $event.target.value)"
                     />
                 </div>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Duração do acesso</label>
+                <input
+                    :value="editingAccessDurationDays"
+                    type="number"
+                    min="1"
+                    max="3650"
+                    :class="inputClass"
+                    class="w-full"
+                    placeholder="Ilimitado"
+                    @input="emit('update:editingAccessDurationDays', $event.target.value)"
+                />
+                <p class="mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
+                    Em dias após a compra. Deixe vazio para acesso ilimitado.
+                </p>
             </div>
         </template>
 

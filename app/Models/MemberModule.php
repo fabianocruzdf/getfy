@@ -21,6 +21,7 @@ class MemberModule extends Model
         'external_url',
         'release_after_days',
         'release_at_date',
+        'access_duration_days',
     ];
 
     protected function casts(): array
@@ -30,6 +31,7 @@ class MemberModule extends Model
             'show_title_on_cover' => 'boolean',
             'release_after_days' => 'integer',
             'release_at_date' => 'date:Y-m-d',
+            'access_duration_days' => 'integer',
         ];
     }
 

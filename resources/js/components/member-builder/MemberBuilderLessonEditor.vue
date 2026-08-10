@@ -152,6 +152,21 @@ const lessonsModel = defineModel('lessons', { type: Array, default: () => [] });
                     />
                 </div>
             </div>
+            <div>
+                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Duração do acesso</label>
+                <input
+                    v-model="lessonForm.access_duration_days"
+                    type="number"
+                    min="1"
+                    max="3650"
+                    :class="inputClass"
+                    class="w-full"
+                    placeholder="Ilimitado"
+                />
+                <p class="mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
+                    Em dias após a compra. Deixe vazio para acesso ilimitado.
+                </p>
+            </div>
             <div v-if="lessonForm.type === 'link'">
                 <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Título do link</label>
                 <input v-model="lessonForm.link_title" type="text" :class="inputClass" class="w-full" placeholder="Ex: Abrir material" />

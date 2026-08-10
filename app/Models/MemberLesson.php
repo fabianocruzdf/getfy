@@ -31,6 +31,7 @@ class MemberLesson extends Model
         'useful_links',
         'release_after_days',
         'release_at_date',
+        'access_duration_days',
         'content_text',
         'duration_seconds',
         'is_free',
@@ -50,6 +51,7 @@ class MemberLesson extends Model
             'useful_links' => 'array',
             'release_after_days' => 'integer',
             'release_at_date' => 'date:Y-m-d',
+            'access_duration_days' => 'integer',
         ];
     }
 

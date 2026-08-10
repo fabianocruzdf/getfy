@@ -302,6 +302,7 @@ class MemberAreaAppController extends Controller
                 'title' => $module->title,
                 'thumbnail' => $this->moduleThumbnailUrl($module, $product, $effectiveModule),
                 'section' => $module->section ? ['id' => $module->section->id, 'title' => $module->section->title] : null,
+                ...$moduleLock,
             ],
             'lessons' => $lessons,
             'current_lesson' => $currentLessonData,
@@ -448,7 +449,7 @@ class MemberAreaAppController extends Controller
      */
     public function presentationPdf(Request $request, string $slug, MemberLesson $lesson, int $fileIndex): SymfonyResponse
     {
-        $this->assertLessonViewableForPdf($request, $lesson);
+        $this->assertLessonViewable($request, $lesson);
         if (! in_array($lesson->type, [MemberLesson::TYPE_PDF_PRESENTATION, MemberLesson::TYPE_PDF_READER], true)) {
             abort(404);
         }
@@ -481,7 +482,7 @@ class MemberAreaAppController extends Controller
         if (! $user) {
             return response()->json(['message' => 'Não autenticado.'], 401);
         }
-        $this->assertLessonViewableForPdf($request, $lesson);
+        $this->assertLessonViewable($request, $lesson);
         if ($lesson->type !== MemberLesson::TYPE_PDF_READER) {
             abort(404);
         }
@@ -510,7 +511,7 @@ class MemberAreaAppController extends Controller
         if (! $user) {
             return response()->json(['message' => 'Não autenticado.'], 401);
         }
-        $this->assertLessonViewableForPdf($request, $lesson);
+        $this->assertLessonViewable($request, $lesson);
         if ($lesson->type !== MemberLesson::TYPE_PDF_READER) {
             abort(404);
         }
@@ -550,7 +551,7 @@ class MemberAreaAppController extends Controller
         if (! $user) {
             return response()->json(['message' => 'Não autenticado.'], 401);
         }
-        $this->assertLessonViewableForPdf($request, $lesson);
+        $this->assertLessonViewable($request, $lesson);
 
         $liked = false;
         $count = (int) ($lesson->likes_count ?? 0);
@@ -591,7 +592,7 @@ class MemberAreaAppController extends Controller
         if (! $user) {
             return response()->json(['message' => 'Não autenticado.'], 401);
         }
-        $this->assertLessonViewableForPdf($request, $lesson);
+        $this->assertLessonViewable($request, $lesson);
 
         $validated = $request->validate([
             'notes' => ['nullable', 'string', 'max:5000'],
@@ -838,6 +839,7 @@ class MemberAreaAppController extends Controller
                 return $redirect;
             }
         }
+        $this->assertLessonViewable($request, $lesson);
         $this->progressService->markLessonCompleted($lesson->id, $user);
 
         $this->logMemberActivity($request, $product, $user, 'member_area.lesson_complete', [
@@ -873,6 +875,7 @@ class MemberAreaAppController extends Controller
                 return $redirect;
             }
         }
+        $this->assertLessonViewable($request, $lesson);
         $config = $product->member_area_config;
         if (empty($config['comments_enabled'])) {
             abort(403, 'Comentários desativados para este produto.');
@@ -1782,13 +1785,35 @@ class MemberAreaAppController extends Controller
         return ['available_at' => null, 'mode' => null];
     }
 
-    private function lockPayload(?Carbon $availableAt, Carbon $now, ?string $mode): array
+    private function accessExpiresAt(?int $durationDays, Carbon $accessStartAt): ?Carbon
     {
-        if (! $availableAt) {
-            return ['is_locked' => false, 'available_at' => null, 'lock_message' => null];
+        if (! is_int($durationDays) || $durationDays <= 0 || auth()->user()?->canAccessPanel()) {
+            return null;
         }
-        if ($availableAt->lessThanOrEqualTo($now)) {
-            return ['is_locked' => false, 'available_at' => $availableAt->toIso8601String(), 'lock_message' => null];
+
+        return $accessStartAt->copy()->addDays($durationDays);
+    }
+
+    private function lockPayload(?Carbon $availableAt, ?Carbon $expiresAt, Carbon $now, ?string $mode): array
+    {
+        $payload = [
+            'is_locked' => false,
+            'available_at' => $availableAt?->toIso8601String(),
+            'expires_at' => $expiresAt?->toIso8601String(),
+            'lock_message' => null,
+            'lock_reason' => null,
+        ];
+
+        if ($expiresAt && $expiresAt->lessThanOrEqualTo($now)) {
+            return [
+                ...$payload,
+                'is_locked' => true,
+                'lock_message' => 'Acesso encerrado em '.$expiresAt->format('d/m/Y'),
+                'lock_reason' => 'expired',
+            ];
+        }
+        if (! $availableAt || $availableAt->lessThanOrEqualTo($now)) {
+            return $payload;
         }
         $message = null;
         if ($mode === 'date') {
@@ -1802,13 +1827,20 @@ class MemberAreaAppController extends Controller
         } else {
             $message = 'Disponível em '.$availableAt->format('d/m/Y H:i');
         }
-        return ['is_locked' => true, 'available_at' => $availableAt->toIso8601String(), 'lock_message' => $message];
+        return [
+            ...$payload,
+            'is_locked' => true,
+            'lock_message' => $message,
+            'lock_reason' => 'scheduled',
+        ];
     }
 
     private function moduleLockPayload(MemberModule $module, Carbon $accessStartAt, Carbon $now): array
     {
         $meta = $this->scheduleMeta($module->release_after_days, $module->release_at_date, $accessStartAt);
-        return $this->lockPayload($meta['available_at'], $now, $meta['mode']);
+        $expiresAt = $this->accessExpiresAt($module->access_duration_days, $accessStartAt);
+
+        return $this->lockPayload($meta['available_at'], $expiresAt, $now, $meta['mode']);
     }
 
     private function lessonLockPayload(MemberLesson $lesson, ?MemberModule $module, Carbon $accessStartAt, Carbon $now): array
@@ -1837,7 +1869,16 @@ class MemberAreaAppController extends Controller
                 $mode = $moduleMeta['mode'];
             }
         }
-        return $this->lockPayload($availableAt, $now, $mode);
+        $lessonExpiresAt = $this->accessExpiresAt($lesson->access_duration_days, $accessStartAt);
+        $moduleExpiresAt = $module ? $this->accessExpiresAt($module->access_duration_days, $accessStartAt) : null;
+        $expiresAt = null;
+        if ($lessonExpiresAt && $moduleExpiresAt) {
+            $expiresAt = $lessonExpiresAt->lessThanOrEqualTo($moduleExpiresAt) ? $lessonExpiresAt : $moduleExpiresAt;
+        } else {
+            $expiresAt = $lessonExpiresAt ?? $moduleExpiresAt;
+        }
+
+        return $this->lockPayload($availableAt, $expiresAt, $now, $mode);
     }
 
     private function moduleThumbnailUrl(MemberModule $module, Product $product, ?MemberModule $fallback = null): ?string
@@ -2098,7 +2139,7 @@ class MemberAreaAppController extends Controller
         return $this->resolver->baseUrlForProduct($product);
     }
 
-    private function assertLessonViewableForPdf(Request $request, MemberLesson $lesson): void
+    private function assertLessonViewable(Request $request, MemberLesson $lesson): void
     {
         $product = $this->getProduct($request);
         $user = $request->user();
