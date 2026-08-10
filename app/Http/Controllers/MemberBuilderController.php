@@ -713,6 +713,8 @@ class MemberBuilderController extends Controller
         foreach ($orderedIds as $index => $id) {
             MemberSection::query()->where('product_id', $produto->id)->whereKey($id)->update(['position' => $index + 1]);
         }
+
+        $this->pruneInvalidModuleReleaseDependencies($produto);
     }
 
     /** @param  array<int>  $orderedIds */
@@ -738,6 +740,8 @@ class MemberBuilderController extends Controller
                 ->whereKey($id)
                 ->update(['position' => $index + 1]);
         }
+
+        $this->pruneInvalidModuleReleaseDependencies($produto);
     }
 
     /** @param  array<int>  $orderedIds */
@@ -762,6 +766,40 @@ class MemberBuilderController extends Controller
                 ->where('member_module_id', $module->id)
                 ->whereKey($id)
                 ->update(['position' => $index + 1]);
+        }
+
+        $this->pruneInvalidLessonReleaseDependencies($module);
+    }
+
+    private function pruneInvalidModuleReleaseDependencies(Product $product): void
+    {
+        $previousModuleIds = [];
+
+        foreach ($this->orderedCourseModules($product) as $module) {
+            $dependencies = $module->releaseDependencies();
+            if ($previousModuleIds === []) {
+                $dependencies->delete();
+            } else {
+                $dependencies->whereNotIn('required_member_module_id', $previousModuleIds)->delete();
+            }
+
+            $previousModuleIds[] = (int) $module->id;
+        }
+    }
+
+    private function pruneInvalidLessonReleaseDependencies(MemberModule $module): void
+    {
+        $previousLessonIds = [];
+
+        foreach ($module->lessons()->orderBy('position')->get() as $lesson) {
+            $dependencies = $lesson->releaseDependencies();
+            if ($previousLessonIds === []) {
+                $dependencies->delete();
+            } else {
+                $dependencies->whereNotIn('required_member_lesson_id', $previousLessonIds)->delete();
+            }
+
+            $previousLessonIds[] = (int) $lesson->id;
         }
     }
 

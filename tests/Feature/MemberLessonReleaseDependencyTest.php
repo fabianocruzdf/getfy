@@ -20,7 +20,7 @@ class MemberLessonReleaseDependencyTest extends TestCase
         $student = User::factory()->create(['role' => User::ROLE_ALUNO, 'tenant_id' => 1]);
         $product = $this->createTestProduct([
             'type' => Product::TYPE_AREA_MEMBROS,
-            'checkout_slug' => 'lesson-release-dependency-'.substr(uniqid('', true), -8),
+            'checkout_slug' => 'lesson-rel-'.substr(uniqid('', true), -5),
         ]);
         $section = MemberSection::create([
             'product_id' => $product->id,
