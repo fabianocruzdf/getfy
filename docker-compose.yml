@@ -1,5 +1,3 @@
-#docker compose PRD
-
 services:
   app:
     build:
