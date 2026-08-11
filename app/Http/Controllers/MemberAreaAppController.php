@@ -2,13 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\MemberActivityLog;
 use App\Models\MemberCertificateIssued;
 use App\Models\MemberComment;
 use App\Models\MemberCommunityPage;
 use App\Models\MemberCommunityPost;
 use App\Models\MemberCommunityPostComment;
 use App\Models\MemberCommunityPostLike;
-use App\Models\MemberActivityLog;
 use App\Models\MemberInternalProduct;
 use App\Models\MemberLesson;
 use App\Models\MemberLessonLike;
@@ -31,7 +31,6 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Inertia\Inertia;
 use Inertia\Response;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
@@ -73,7 +72,7 @@ class MemberAreaAppController extends Controller
         $user = $request->user();
 
         $this->logMemberActivity($request, $product, $user, 'member_area.open', [
-            'path' => '/' . ltrim($request->path(), '/'),
+            'path' => '/'.ltrim($request->path(), '/'),
         ]);
 
         $accessStartAt = $this->userAccessStartAt($product, $user);
@@ -355,6 +354,7 @@ class MemberAreaAppController extends Controller
                 return redirect()->route($this->memberAreaModuleRouteName($request), ['slug' => $slug, 'module' => $moduleRouteId])
                     ->with('error', $lessonLock['lock_message'] ?? 'Aula ainda não liberada.');
             }
+
             return redirect()->route($this->memberAreaModulosRouteName($request), ['slug' => $slug])
                 ->with('error', $lessonLock['lock_message'] ?? 'Aula ainda não liberada.');
         }
@@ -1430,6 +1430,7 @@ class MemberAreaAppController extends Controller
         if (! $user instanceof User) {
             // In host-based member areas, GET /login is handled by the platform login controller.
             $isHost = str_ends_with(($request->route()?->getName() ?? ''), '.host');
+
             return $isHost
                 ? redirect()->to('/login')->with('error', 'Faça login para acessar a área de membros.')
                 : redirect()->route('member-area.login', ['slug' => $slug])->with('error', 'Faça login para acessar a área de membros.');
@@ -1487,6 +1488,7 @@ class MemberAreaAppController extends Controller
 
         if (! $user instanceof User) {
             $isHost = str_ends_with(($request->route()?->getName() ?? ''), '.host');
+
             return $isHost
                 ? redirect()->to('/login')->with('error', 'Faça login para acessar a área de membros.')
                 : redirect()->route('member-area.login', ['slug' => $slug])->with('error', 'Faça login para acessar a área de membros.');
@@ -1532,8 +1534,9 @@ class MemberAreaAppController extends Controller
             if ($link !== '') {
                 return str_starts_with($link, 'http://') || str_starts_with($link, 'https://')
                     ? redirect()->away($link)
-                    : redirect('/' . ltrim($link, '/'));
+                    : redirect('/'.ltrim($link, '/'));
             }
+
             return redirect()->to($this->baseUrlForRequest($host, $request))
                 ->with('error', 'Este produto está como tipo Link, mas o link de entrega não foi configurado.');
         }
@@ -1547,12 +1550,14 @@ class MemberAreaAppController extends Controller
     private function memberAreaProductsOpenRouteName(Request $request): string
     {
         $name = $request->route()?->getName() ?? '';
+
         return str_ends_with($name, '.host') ? 'member-area-app.products.open.host' : 'member-area-app.products.open';
     }
 
     private function memberAreaProductsDeliverableRouteName(Request $request): string
     {
         $name = $request->route()?->getName() ?? '';
+
         return str_ends_with($name, '.host') ? 'member-area-app.products.deliverable.host' : 'member-area-app.products.deliverable';
     }
 
@@ -1562,6 +1567,7 @@ class MemberAreaAppController extends Controller
     private function memberAreaProductsRouteParams(Request $request, string $slug, string $productId): array
     {
         $isHost = str_ends_with(($request->route()?->getName() ?? ''), '.host');
+
         return $isHost ? ['relatedProduct' => $productId] : ['slug' => $slug, 'relatedProduct' => $productId];
     }
 
@@ -1571,6 +1577,7 @@ class MemberAreaAppController extends Controller
     private function memberAreaModuleRouteParams(Request $request, string $slug, string $moduleId): array
     {
         $isHost = str_ends_with(($request->route()?->getName() ?? ''), '.host');
+
         return $isHost ? ['module' => $moduleId] : ['slug' => $slug, 'module' => $moduleId];
     }
 
@@ -1639,7 +1646,7 @@ class MemberAreaAppController extends Controller
             if ($link !== '') {
                 return str_starts_with($link, 'http://') || str_starts_with($link, 'https://')
                     ? redirect()->away($link)
-                    : redirect('/' . ltrim($link, '/'));
+                    : redirect('/'.ltrim($link, '/'));
             }
         }
 
@@ -1768,6 +1775,7 @@ class MemberAreaAppController extends Controller
         if ($createdAt) {
             return Carbon::parse($createdAt);
         }
+
         return now();
     }
 
@@ -1782,6 +1790,7 @@ class MemberAreaAppController extends Controller
         if (is_int($afterDays) && $afterDays > 0) {
             return ['available_at' => $accessStartAt->copy()->addDays($afterDays), 'mode' => 'days'];
         }
+
         return ['available_at' => null, 'mode' => null];
     }
 
@@ -1827,12 +1836,14 @@ class MemberAreaAppController extends Controller
         } else {
             $message = 'Disponível em '.$availableAt->format('d/m/Y H:i');
         }
+
         return [
             ...$payload,
             'is_locked' => true,
             'lock_message' => $message,
             'lock_reason' => 'scheduled',
         ];
+
     }
 
     private function moduleLockPayload(MemberModule $module, Carbon $accessStartAt, Carbon $now): array
@@ -1840,7 +1851,53 @@ class MemberAreaAppController extends Controller
         $meta = $this->scheduleMeta($module->release_after_days, $module->release_at_date, $accessStartAt);
         $expiresAt = $this->accessExpiresAt($module->access_duration_days, $accessStartAt);
 
-        return $this->lockPayload($meta['available_at'], $expiresAt, $now, $meta['mode']);
+        $scheduleLock = $this->lockPayload($meta['available_at'], $expiresAt, $now, $meta['mode']);
+        if (($scheduleLock['is_locked'] ?? false) === true) {
+            return $scheduleLock;
+        }
+
+        $user = request()->user();
+        if (! $user instanceof User) {
+            return $scheduleLock;
+        }
+
+        $dependencies = $module->releaseDependencies()
+            ->with(['requiredModule.lessons:id,member_module_id'])
+            ->get();
+        if ($dependencies->isEmpty()) {
+            return $scheduleLock;
+        }
+
+        $lessonIds = $dependencies
+            ->flatMap(fn ($dependency) => $dependency->requiredModule?->lessons->pluck('id') ?? [])
+            ->unique()
+            ->values();
+        $completedLessonIds = MemberLessonProgress::query()
+            ->where('user_id', $user->id)
+            ->whereNotNull('completed_at')
+            ->whereIn('member_lesson_id', $lessonIds)
+            ->pluck('member_lesson_id')
+            ->flip();
+
+        foreach ($dependencies as $dependency) {
+            $requiredModule = $dependency->requiredModule;
+            $requiredLessons = $requiredModule?->lessons ?? collect();
+            $completedCount = $requiredLessons->filter(fn (MemberLesson $lesson) => isset($completedLessonIds[$lesson->id]))->count();
+            $progressPercent = $requiredLessons->isEmpty()
+                ? 0
+                : (int) floor(($completedCount / $requiredLessons->count()) * 100);
+            $minimumProgressPercent = (int) $dependency->minimum_progress_percent;
+            if ($progressPercent < $minimumProgressPercent) {
+                return [
+                    ...$scheduleLock,
+                    'is_locked' => true,
+                    'lock_message' => 'Atinja '.$minimumProgressPercent.'% no módulo '.($requiredModule?->title ?? 'anterior').' para liberar este módulo.',
+                    'lock_reason' => 'prerequisite',
+                ];
+            }
+        }
+
+        return $scheduleLock;
     }
 
     private function lessonLockPayload(MemberLesson $lesson, ?MemberModule $module, Carbon $accessStartAt, Carbon $now): array
@@ -1878,7 +1935,37 @@ class MemberAreaAppController extends Controller
             $expiresAt = $lessonExpiresAt ?? $moduleExpiresAt;
         }
 
-        return $this->lockPayload($availableAt, $expiresAt, $now, $mode);
+        $scheduleLock = $this->lockPayload($availableAt, $expiresAt, $now, $mode);
+        if (($scheduleLock['is_locked'] ?? false) === true) {
+            return $scheduleLock;
+        }
+
+        $user = request()->user();
+        if (! $user instanceof User) {
+            return $scheduleLock;
+        }
+        $dependencies = $lesson->releaseDependencies()->with('requiredLesson')->get();
+        if ($dependencies->isEmpty()) {
+            return $scheduleLock;
+        }
+        $completedIds = MemberLessonProgress::query()
+            ->where('user_id', $user->id)
+            ->whereNotNull('completed_at')
+            ->whereIn('member_lesson_id', $dependencies->pluck('required_member_lesson_id'))
+            ->pluck('member_lesson_id')
+            ->flip();
+        foreach ($dependencies as $dependency) {
+            if (! isset($completedIds[$dependency->required_member_lesson_id])) {
+                return [
+                    ...$scheduleLock,
+                    'is_locked' => true,
+                    'lock_message' => 'Conclua a aula '.($dependency->requiredLesson?->title ?? 'anterior').' para liberar esta aula.',
+                    'lock_reason' => 'prerequisite',
+                ];
+            }
+        }
+
+        return $scheduleLock;
     }
 
     private function moduleThumbnailUrl(MemberModule $module, Product $product, ?MemberModule $fallback = null): ?string
