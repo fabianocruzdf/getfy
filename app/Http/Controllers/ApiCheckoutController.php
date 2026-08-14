@@ -18,6 +18,7 @@ use App\Models\SubscriptionPlan;
 use App\Models\User;
 use App\Services\EfiPixRecorrenteService;
 use App\Services\CajuPayApiCheckoutService;
+use App\Services\CajuPaySubscriptionService;
 use App\Services\CheckoutAbuseGuard;
 use App\Services\PaymentService;
 use App\Services\PushinPayPixRecorrenteService;
@@ -26,6 +27,7 @@ use App\Support\FakeConsumerData;
 use App\Support\MetaPurchaseTracking;
 use App\Support\CheckoutCardCredentialsPayload;
 use App\Support\CheckoutPaymentMethodsBuilder;
+use App\Support\PixCheckoutDisplay;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -372,6 +374,59 @@ class ApiCheckoutController extends Controller
             try {
                 event(new OrderPending($order));
                 $gatewaySlug = (string) ($pg['pix_auto'] ?? '');
+                if ($gatewaySlug === '' || $gatewaySlug === '__default__') {
+                    $gatewaySlug = (string) (app(PaymentService::class)->getFirstAvailableGatewayForMethod($tenantId, 'pix_auto', $product, $gatewayConfig) ?? '');
+                }
+
+                if ($gatewaySlug === 'cajupay') {
+                    if (! $plan || ! CajuPaySubscriptionService::supportsPlanInterval((string) $plan->interval)) {
+                        throw new \RuntimeException('PIX Automático CajuPay não disponível para este intervalo de plano.');
+                    }
+
+                    $consumerWithAddress = array_merge($consumer, [
+                        'address' => is_array($customer['address'] ?? null) ? $customer['address'] : [],
+                    ]);
+
+                    $result = app(CajuPaySubscriptionService::class)->createPixAutomatic(
+                        $order,
+                        $plan,
+                        $consumerWithAddress,
+                        (float) $amount,
+                        $product?->name ?? $plan->name
+                    );
+
+                    $subscriptionId = $result['subscription_id'];
+                    $copyPaste = $result['pix_copy_paste'] ?? $result['pix_emv'] ?? null;
+                    $qrcodeImage = null;
+
+                    $order->update([
+                        'gateway' => 'cajupay',
+                        'gateway_id' => $subscriptionId,
+                        'metadata' => array_merge($order->metadata ?? [], [
+                            'cajupay_subscription_id' => $subscriptionId,
+                            'cajupay_subscription_correlation_id' => $result['correlation_id'] ?? ('order-'.$order->id),
+                            'cajupay_subscription_status' => $result['status'] ?? 'pending_approval',
+                            'checkout_payment_method' => 'pix_auto',
+                        ]),
+                    ]);
+
+                    event(new PixGenerated($order, [
+                        'qrcode' => $qrcodeImage,
+                        'copy_paste' => $copyPaste ?? '',
+                        'transaction_id' => $subscriptionId,
+                    ]));
+
+                    $pixToken = PixCheckoutDisplay::persistAndStoreSession($order, [
+                        'qrcode' => $qrcodeImage,
+                        'copy_paste' => $copyPaste ?? '',
+                    ], [
+                        'amount' => $amount,
+                        'product_name' => $product?->name ?? 'Pagamento',
+                        'redirect_after_purchase' => route('api-checkout.thank-you', ['order_id' => $order->id]),
+                    ]);
+
+                    return redirect()->route('checkout.pix', ['token' => $pixToken]);
+                }
 
                 if ($gatewaySlug === 'pushinpay') {
                     $credential = GatewayCredential::forTenant($tenantId)

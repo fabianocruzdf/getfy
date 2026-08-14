@@ -82,7 +82,7 @@ class ProcessPaymentWebhook implements ShouldQueue
             }
             $apiStatus = $this->fetchGatewayTransactionStatus($order);
             $trustedCajuPayHmac = $this->gatewaySlug === 'cajupay'
-                && ($this->payload['webhook_source'] ?? '') === 'cajupay_hmac_verified';
+                && in_array($this->payload['webhook_source'] ?? '', ['cajupay_hmac_verified', 'cajupay_subscription_verified'], true);
             if ($apiStatus !== 'paid') {
                 if (! $trustedCajuPayHmac) {
                     Log::warning('ProcessPaymentWebhook: paid branch aborted (gateway reconfirm not paid)', [
@@ -135,6 +135,10 @@ class ProcessPaymentWebhook implements ShouldQueue
                             $idRec = $metadata['efi_pix_auto_id_rec'];
                         } elseif (isset($metadata['pushinpay_subscription_id']) && $this->gatewaySlug === 'pushinpay') {
                             $idRec = $metadata['pushinpay_subscription_id'];
+                        } elseif (isset($metadata['cajupay_subscription_id']) && $this->gatewaySlug === 'cajupay') {
+                            $idRec = $metadata['cajupay_subscription_id'];
+                        } elseif ($this->gatewaySlug === 'cajupay' && ! empty($order->gateway_id) && ($metadata['checkout_payment_method'] ?? '') === 'pix_auto') {
+                            $idRec = $order->gateway_id;
                         }
                         $subscription = Subscription::create([
                             'tenant_id' => $order->tenant_id,
@@ -203,7 +207,8 @@ class ProcessPaymentWebhook implements ShouldQueue
                 $q->where('gateway_id', $tid)
                     ->orWhere('metadata->cajupay_checkout_session_id', $tid)
                     ->orWhere('metadata->cajupay_session_token', $tid)
-                    ->orWhere('metadata->cajupay_payment_id', $tid);
+                    ->orWhere('metadata->cajupay_payment_id', $tid)
+                    ->orWhere('metadata->cajupay_subscription_id', $tid);
             })
             ->first();
     }

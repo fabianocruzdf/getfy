@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Events\BoletoGenerated;
 use App\Events\OrderCompleted;
 use App\Events\OrderPending;
-use App\Events\PixGenerated;
 use App\Events\SubscriptionRenewed;
 use App\Gateways\GatewayRegistry;
 use App\Models\GatewayCredential;
@@ -14,14 +13,13 @@ use App\Models\Setting;
 use App\Models\Subscription;
 use App\Services\EfiPixRecorrenteService;
 use App\Services\GeoIp;
+use App\Services\SubscriptionAutoBillingService;
 use App\Services\SubscriptionLifecycleService;
 use App\Support\CheckoutCurrencyCatalog;
-use App\Services\PaymentService;
 use App\Support\CheckoutPaymentMethodOrder;
-use App\Support\FakeConsumerData;
+use App\Support\PixCheckoutDisplay;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -98,7 +96,72 @@ class RenewalController extends Controller
             'amount_brl' => round($amount, 2),
             'available_payment_methods' => $availablePaymentMethods,
             'saved_payment_methods' => $savedPaymentMethods,
+            'auto_pix_url' => url('/renovar/'.$token.'/pix'),
+            'card_offsession_available' => false,
         ]);
+    }
+
+    /**
+     * Gera (ou reutiliza) PIX de renovação e redireciona para a tela do QR — sem formulário resumido.
+     */
+    public function payPix(Request $request, string $token, SubscriptionLifecycleService $lifecycle): RedirectResponse
+    {
+        $subscription = Subscription::with(['user', 'product', 'subscriptionPlan'])
+            ->where('renewal_token', $token)
+            ->whereIn('status', [Subscription::STATUS_ACTIVE, Subscription::STATUS_PAST_DUE])
+            ->first();
+
+        if (! $subscription || $subscription->subscriptionPlan->isLifetime()) {
+            return redirect()->route('login')->with('error', 'Link de renovação inválido ou expirado.');
+        }
+
+        if (! $lifecycle->canRenew($subscription)) {
+            return redirect()->route('login')->with(
+                'error',
+                'O prazo para renovação desta assinatura expirou. Entre em contato com o suporte.'
+            );
+        }
+
+        try {
+            $billing = app(SubscriptionAutoBillingService::class);
+            $result = $billing->ensureRenewalPayment($subscription, sendEmail: false);
+
+            if (! is_array($result) || empty($result['order'])) {
+                return redirect()->route('renewal.show', $token)
+                    ->with('error', 'Não foi possível gerar o PIX. Escolha outra forma de pagamento.');
+            }
+
+            /** @var Order $order */
+            $order = $result['order'];
+
+            if (($result['type'] ?? '') === 'pix_auto') {
+                return redirect()->route('renewal.show', $token)
+                    ->with('info', 'O débito PIX automático foi agendado. Você receberá a confirmação quando o pagamento for processado.');
+            }
+
+            $pix = [
+                'qrcode' => $result['qrcode'] ?? null,
+                'copy_paste' => $result['copy_paste'] ?? null,
+            ];
+            if (! $pix['copy_paste'] && ! $pix['qrcode']) {
+                $fromOrder = $billing->pixDataFromOrder($order);
+                $pix = $fromOrder ?? $pix;
+            }
+
+            $displayToken = PixCheckoutDisplay::storeSession($order, $pix, [
+                'amount' => (float) $order->amount,
+                'product_name' => $subscription->product?->name,
+                'checkout_slug' => $subscription->subscriptionPlan?->checkout_slug
+                    ?: $subscription->product?->checkout_slug,
+                'customer_name' => $subscription->user?->name,
+                'customer_email' => $subscription->user?->email,
+            ]);
+
+            return redirect()->route('checkout.pix', ['token' => $displayToken]);
+        } catch (\Throwable $e) {
+            return redirect()->route('renewal.show', $token)
+                ->with('error', $e->getMessage() ?: 'Não foi possível gerar o PIX. Tente novamente.');
+        }
     }
 
     public function process(Request $request, SubscriptionLifecycleService $lifecycle): RedirectResponse
@@ -204,61 +267,36 @@ class RenewalController extends Controller
         }
 
         if ($paymentMethod === 'pix') {
-            $order = Order::create(array_merge($orderPayload, [
-                'status' => 'pending',
-                'gateway' => null,
-                'gateway_id' => null,
-                'metadata' => ['checkout_payment_method' => 'pix'],
-            ]));
-            event(new OrderPending($order));
-            try {
-                $paymentService = app(PaymentService::class);
-                $fake = FakeConsumerData::getForGateway($order->id);
-                $consumer = [
-                    'name' => $user->name ?? $user->email,
-                    'document' => $fake['document'],
-                    'email' => $user->email,
-                ];
-                $pixResult = $paymentService->createPixPayment($order, $product, $consumer);
-                event(new PixGenerated($order, [
-                    'qrcode' => $pixResult['qrcode'] ?? null,
-                    'copy_paste' => $pixResult['copy_paste'] ?? null,
-                    'transaction_id' => $pixResult['transaction_id'] ?? null,
-                ]));
-                $pixToken = \Illuminate\Support\Str::random(32);
-                session()->put('pix_display.' . $pixToken, [
-                    'order_id' => $order->id,
-                    'qrcode' => $pixResult['qrcode'] ?? null,
-                    'copy_paste' => $pixResult['copy_paste'] ?? null,
-                    'amount' => $amount,
-                    'product_name' => $product->name,
-                    'checkout_slug' => $plan->checkout_slug,
-                    'redirect_after_purchase' => null,
-                    'customer_name' => $user->name,
-                    'customer_email' => $user->email,
-                    'customer_phone' => null,
-                    'created_at' => time(),
-                ]);
-                return redirect()->route('checkout.pix', ['token' => $pixToken]);
-            } catch (\Throwable $e) {
-                $order->delete();
-                return back()->with('error', $e->getMessage() ?: 'Não foi possível gerar o PIX. Tente novamente.');
-            }
+            return redirect()->route('renewal.pix', $request->input('token'));
         }
 
         if ($paymentMethod === 'card' || $paymentMethod === 'boleto') {
+            // Cartão off-session não está disponível (token não é salvo no checkout).
+            // Direciona o cliente ao checkout do plano/produto para cobranca atenciosa com 3DS/tokenização.
+            if ($paymentMethod === 'card') {
+                $slug = $plan->checkout_slug ?: $product->checkout_slug;
+                if ($slug) {
+                    return redirect()->to(url('/c/'.$slug).'?renewal_token='.urlencode((string) $request->input('token')))
+                        ->with('info', 'Informe os dados do cartão para renovar a assinatura.');
+                }
+
+                return back()->with(
+                    'error',
+                    'Renovação automática com cartão exige cartão salvo no gateway (ainda não disponível). Use PIX ou o checkout do produto.'
+                );
+            }
+
             $order = Order::create(array_merge($orderPayload, [
                 'status' => 'pending',
                 'gateway' => $paymentMethod,
                 'gateway_id' => null,
+                'metadata' => ['checkout_payment_method' => 'boleto'],
             ]));
             event(new OrderPending($order));
-            if ($paymentMethod === 'boleto') {
-                event(new BoletoGenerated($order));
-            }
-            $methodLabel = $paymentMethod === 'card' ? 'Cartão' : 'Boleto';
+            event(new BoletoGenerated($order));
+
             return redirect()->route('renewal.show', $request->input('token'))
-                ->with('info', "Pagamento por {$methodLabel} em breve. Você receberá as instruções por e-mail.");
+                ->with('info', 'Pedido de boleto criado. Você receberá as instruções por e-mail em breve.');
         }
 
         $order = Order::create(array_merge($orderPayload, [

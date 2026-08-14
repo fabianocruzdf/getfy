@@ -16,12 +16,14 @@ const props = defineProps({
     amount_brl: { type: Number, required: true },
     available_payment_methods: { type: Array, default: () => [] },
     saved_payment_methods: { type: Array, default: () => [] },
+    auto_pix_url: { type: String, default: null },
+    card_offsession_available: { type: Boolean, default: false },
     flash: { type: Object, default: () => ({}) },
 });
 
 const form = useForm({
     token: props.token,
-    payment_method: 'manual',
+    payment_method: 'pix',
 });
 
 const methods = computed(() => {
@@ -37,14 +39,33 @@ const methods = computed(() => {
     return list.map((m) => ({ id: m.id, label: m.label }));
 });
 
+const onlyPix = computed(() => {
+    const ids = methods.value.map((m) => m.id);
+    return ids.length === 1 && ids[0] === 'pix';
+});
+
 watch(
     methods,
     (list) => {
+        if (!list.some((m) => m.id === form.payment_method)) {
+            form.payment_method = list[0]?.id ?? 'manual';
+        }
         if (form.payment_method === 'apple_pay' && !list.some((m) => m.id === 'apple_pay')) {
             form.payment_method = list[0]?.id ?? 'manual';
         }
         if (form.payment_method === 'google_pay' && !list.some((m) => m.id === 'google_pay')) {
             form.payment_method = list[0]?.id ?? 'manual';
+        }
+    },
+    { immediate: true }
+);
+
+watch(
+    onlyPix,
+    (yes) => {
+        // Só PIX disponível: vai direto para a cobrança (sem tela de escolha).
+        if (yes && props.auto_pix_url) {
+            window.location.href = props.auto_pix_url;
         }
     },
     { immediate: true }
@@ -115,9 +136,12 @@ function submit() {
                             </label>
                         </div>
                     </div>
+                    <div v-if="form.payment_method === 'card'" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                        A renovação com cartão exige digitação dos dados no checkout (sem cobrança automática off-session). Ao continuar, você será redirecionado.
+                    </div>
                     <Button type="submit" class="w-full" :disabled="form.processing">
                         <Loader2 v-if="form.processing" class="mr-2 h-4 w-4 animate-spin" />
-                        {{ form.processing ? 'Processando…' : 'Pagar e renovar' }}
+                        {{ form.processing ? 'Processando…' : (form.payment_method === 'pix' ? 'Gerar PIX e pagar' : 'Pagar e renovar') }}
                     </Button>
                 </form>
             </div>

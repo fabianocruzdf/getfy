@@ -26,6 +26,7 @@ use App\Services\MemberProgressService;
 use App\Services\StorageService;
 use App\Services\UserProductAccessService;
 use App\Support\MemberLessonPdfContentResolver;
+use App\Plugins\PluginHookBus;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -79,6 +80,7 @@ class MemberAreaAppController extends Controller
         $accessStartAt = $this->userAccessStartAt($product, $user);
         $now = now();
         $completedLessonIds = $this->progressService->completedLessonIdSet($product, $user);
+        $releaseCtx = $this->makeReleaseContext($product, $user);
         $config = $product->member_area_config;
         $sections = $product->memberSections()->with(['modules.lessons', 'modules.relatedProduct'])->orderBy('position')->get();
         $progressPercent = $this->progressService->completionPercent($product, $user);
@@ -88,7 +90,7 @@ class MemberAreaAppController extends Controller
         $userProductIds = $this->accessService->ownedProductIdSet($user);
         $push = $this->pushProps($product);
 
-        return Inertia::render('MemberAreaApp/Show', [
+        $payload = [
             'product' => $this->productToArray($product),
             'config' => $config,
             'sections' => $sections->map(fn (MemberSection $s) => [
@@ -96,7 +98,7 @@ class MemberAreaAppController extends Controller
                 'title' => $s->title,
                 'cover_mode' => $s->cover_mode ?? 'vertical',
                 'section_type' => $s->section_type ?? 'courses',
-                'modules' => $s->modules->map(fn ($m) => $this->mapModuleForMemberArea($m, $s, $product, $user, $userProductIds, $baseUrl, $accessStartAt, $now, $completedLessonIds))->values()->all(),
+                'modules' => $s->modules->map(fn ($m) => $this->mapModuleForMemberArea($m, $s, $product, $user, $userProductIds, $baseUrl, $accessStartAt, $now, $completedLessonIds, $releaseCtx))->values()->all(),
             ])->values()->all(),
             'progress_percent' => $progressPercent,
             'continue_watching' => $continueWatching,
@@ -125,7 +127,12 @@ class MemberAreaAppController extends Controller
             'slug' => $slug,
             'push_enabled' => $push['push_enabled'],
             'vapid_public' => $push['vapid_public'],
-        ] + $this->gamificationProps($product, $user));
+        ] + $this->gamificationProps($product, $user);
+
+        PluginHookBus::doAction('member_area.show', $product, $user, $request);
+        $payload = PluginHookBus::applyFilters('member_area.payload', $payload, $product, $user, $request);
+
+        return Inertia::render('MemberAreaApp/Show', $payload);
     }
 
     public function modulos(Request $request, string $slug): Response
@@ -135,6 +142,7 @@ class MemberAreaAppController extends Controller
         $accessStartAt = $this->userAccessStartAt($product, $user);
         $now = now();
         $completedLessonIds = $this->progressService->completedLessonIdSet($product, $user);
+        $releaseCtx = $this->makeReleaseContext($product, $user);
         $sections = $product->memberSections()->with(['modules.lessons'])->orderBy('position')->get();
 
         return Inertia::render('MemberAreaApp/Modulos', [
@@ -144,7 +152,7 @@ class MemberAreaAppController extends Controller
                 'id' => $s->id,
                 'title' => $s->title,
                 'cover_mode' => $s->cover_mode ?? 'vertical',
-                'modules' => $s->modules->map(function (MemberModule $m) use ($accessStartAt, $now, $completedLessonIds) {
+                'modules' => $s->modules->map(function (MemberModule $m) use ($accessStartAt, $now, $completedLessonIds, $releaseCtx) {
                     $effective = ($m->source_member_module_id)
                         ? $this->resolveContentModuleForWrapper($m)
                         : $m;
@@ -154,14 +162,14 @@ class MemberAreaAppController extends Controller
                         'title' => $m->title,
                         'thumbnail' => $m->thumbnail,
                         'show_title_on_cover' => $m->show_title_on_cover ?? true,
-                        ...$this->moduleLockPayload($effective, $accessStartAt, $now),
+                        ...$this->moduleLockPayload($m, $accessStartAt, $now, $releaseCtx),
                         'lessons' => $effective->lessons->map(fn (MemberLesson $l) => [
                             'id' => $l->id,
                             'title' => $l->title,
                             'type' => $l->type,
                             'duration_seconds' => $l->duration_seconds,
                             'is_completed' => isset($completedLessonIds[$l->id]),
-                            ...$this->lessonLockPayload($l, $effective, $accessStartAt, $now),
+                            ...$this->lessonLockPayload($l, $m, $accessStartAt, $now, $releaseCtx),
                         ])->values()->all(),
                     ];
                 })->values()->all(),
@@ -181,6 +189,7 @@ class MemberAreaAppController extends Controller
         $user = $request->user();
         $accessStartAt = $this->userAccessStartAt($product, $user);
         $now = now();
+        $releaseCtx = $this->makeReleaseContext($product, $user);
         if ($module->source_member_module_id) {
             $redirect = $this->assertEmbeddedProductLinkAccess($module, $user);
             if ($redirect !== null) {
@@ -189,7 +198,7 @@ class MemberAreaAppController extends Controller
         }
         $module->load('section');
         $effectiveModule = $this->resolveContentModuleForWrapper($module);
-        $moduleLock = $this->moduleLockPayload($effectiveModule, $accessStartAt, $now);
+        $moduleLock = $this->moduleLockPayload($module, $accessStartAt, $now, $releaseCtx);
         if (($moduleLock['is_locked'] ?? false) === true) {
             return redirect()->route($this->memberAreaModulosRouteName($request), ['slug' => $slug])
                 ->with('error', $moduleLock['lock_message'] ?? 'Módulo ainda não liberado.');
@@ -202,7 +211,7 @@ class MemberAreaAppController extends Controller
             'position' => $l->position,
             'duration_seconds' => $l->duration_seconds,
             'is_completed' => isset($completedLessonIds[$l->id]),
-            ...$this->lessonLockPayload($l, $effectiveModule, $accessStartAt, $now),
+            ...$this->lessonLockPayload($l, $module, $accessStartAt, $now, $releaseCtx),
         ])->values()->all();
 
         $lessonId = $request->query('aula');
@@ -210,10 +219,10 @@ class MemberAreaAppController extends Controller
             ? $effectiveModule->lessons->firstWhere('id', (int) $lessonId)
             : $effectiveModule->lessons->first();
         if ($currentLesson) {
-            $lock = $this->lessonLockPayload($currentLesson, $effectiveModule, $accessStartAt, $now);
+            $lock = $this->lessonLockPayload($currentLesson, $module, $accessStartAt, $now, $releaseCtx);
             if (($lock['is_locked'] ?? false) === true) {
-                $firstUnlocked = $effectiveModule->lessons->first(function (MemberLesson $l) use ($effectiveModule, $accessStartAt, $now) {
-                    return ($this->lessonLockPayload($l, $effectiveModule, $accessStartAt, $now)['is_locked'] ?? false) !== true;
+                $firstUnlocked = $effectiveModule->lessons->first(function (MemberLesson $l) use ($module, $accessStartAt, $now, $releaseCtx) {
+                    return ($this->lessonLockPayload($l, $module, $accessStartAt, $now, $releaseCtx)['is_locked'] ?? false) !== true;
                 });
                 if ($firstUnlocked) {
                     return redirect()->route($this->memberAreaModuleRouteName($request), ['slug' => $slug, 'module' => $module->id, 'aula' => $firstUnlocked->id])
@@ -250,8 +259,17 @@ class MemberAreaAppController extends Controller
         }
 
         $progressPercent = $this->progressService->completionPercent($product, $user);
-        $nextModules = $this->nextModulesPayload($product, $module, $user, $accessStartAt, $now);
-        $lessonNavigation = $this->lessonNavigationPayload($effectiveModule, $currentLesson, $accessStartAt, $now, $nextModules);
+        $releaseCtx = $this->makeReleaseContext($product, $user);
+        $nextModules = $this->nextModulesPayload($product, $module, $user, $accessStartAt, $now, $releaseCtx);
+        $lessonNavigation = $this->lessonNavigationPayload(
+            $effectiveModule,
+            $currentLesson,
+            $accessStartAt,
+            $now,
+            $nextModules,
+            $releaseCtx,
+            $module
+        );
 
         $sections = $product->memberSections()->with('modules')->orderBy('position')->get();
         $sectionsPayload = $sections->map(fn (MemberSection $s) => [
@@ -263,7 +281,7 @@ class MemberAreaAppController extends Controller
                 'title' => $m->title,
                 'thumbnail' => $m->thumbnail,
                 'show_title_on_cover' => $m->show_title_on_cover ?? true,
-                ...$this->moduleLockPayload($m, $accessStartAt, $now),
+                ...$this->moduleLockPayload($m, $accessStartAt, $now, $releaseCtx),
             ])->values()->all(),
         ])->values()->all();
 
@@ -338,17 +356,19 @@ class MemberAreaAppController extends Controller
         }
         $accessStartAt = $this->userAccessStartAt($product, $user);
         $now = now();
+        $releaseCtx = $this->makeReleaseContext($product, $user);
         $effectiveModule = $wrapper !== null
             ? $this->resolveContentModuleForWrapper($wrapper)
             : $lesson->module;
-        if ($effectiveModule) {
-            $moduleLock = $this->moduleLockPayload($effectiveModule, $accessStartAt, $now);
+        $lockModule = $wrapper ?? $effectiveModule;
+        if ($lockModule) {
+            $moduleLock = $this->moduleLockPayload($lockModule, $accessStartAt, $now, $releaseCtx);
             if (($moduleLock['is_locked'] ?? false) === true) {
                 return redirect()->route($this->memberAreaModulosRouteName($request), ['slug' => $slug])
                     ->with('error', $moduleLock['lock_message'] ?? 'Módulo ainda não liberado.');
             }
         }
-        $lessonLock = $this->lessonLockPayload($lesson, $effectiveModule, $accessStartAt, $now);
+        $lessonLock = $this->lessonLockPayload($lesson, $lockModule, $accessStartAt, $now, $releaseCtx);
         if (($lessonLock['is_locked'] ?? false) === true) {
             $moduleRouteId = $wrapper?->id ?? $lesson->module?->id;
             if ($moduleRouteId) {
@@ -1685,8 +1705,9 @@ class MemberAreaAppController extends Controller
 
     /**
      * @param  array<int|string, true>  $completedLessonIds
+     * @param  array{bypass?: bool, product?: Product, user?: User, course_percent?: int, completed_set?: array}  $releaseCtx
      */
-    private function mapModuleForMemberArea(MemberModule $m, MemberSection $s, Product $product, $user, array $userProductIds, string $baseUrl, Carbon $accessStartAt, Carbon $now, array $completedLessonIds): array
+    private function mapModuleForMemberArea(MemberModule $m, MemberSection $s, Product $product, $user, array $userProductIds, string $baseUrl, Carbon $accessStartAt, Carbon $now, array $completedLessonIds, array $releaseCtx = []): array
     {
         $sectionType = $s->section_type ?? 'courses';
 
@@ -1696,14 +1717,14 @@ class MemberAreaAppController extends Controller
                 'title' => $m->title,
                 'thumbnail' => $m->thumbnail,
                 'show_title_on_cover' => $m->show_title_on_cover ?? true,
-                ...$this->moduleLockPayload($m, $accessStartAt, $now),
+                ...$this->moduleLockPayload($m, $accessStartAt, $now, $releaseCtx),
                 'lessons' => $m->lessons->map(fn (MemberLesson $l) => [
                     'id' => $l->id,
                     'title' => $l->title,
                     'type' => $l->type,
                     'duration_seconds' => $l->duration_seconds,
                     'is_completed' => isset($completedLessonIds[$l->id]),
-                    ...$this->lessonLockPayload($l, $m, $accessStartAt, $now),
+                    ...$this->lessonLockPayload($l, $m, $accessStartAt, $now, $releaseCtx),
                 ])->values()->all(),
             ];
         }
@@ -1835,16 +1856,160 @@ class MemberAreaAppController extends Controller
         ];
     }
 
-    private function moduleLockPayload(MemberModule $module, Carbon $accessStartAt, Carbon $now): array
+    /**
+     * Contexto de progresso para liberação de módulos (reutilizado nas listagens).
+     *
+     * @return array{
+     *     bypass: bool,
+     *     product?: Product,
+     *     user?: User,
+     *     course_percent?: int,
+     *     completed_set?: array<int|string, true>
+     * }
+     */
+    private function makeReleaseContext(Product $product, User $user): array
     {
-        $meta = $this->scheduleMeta($module->release_after_days, $module->release_at_date, $accessStartAt);
+        if ($user->canAccessPanel() && $user->tenant_id === $product->tenant_id) {
+            return ['bypass' => true];
+        }
+
+        return [
+            'bypass' => false,
+            'product' => $product,
+            'user' => $user,
+            'course_percent' => $this->progressService->completionPercent($product, $user),
+            'completed_set' => $this->progressService->completedLessonIdSet($product, $user),
+        ];
+    }
+
+    /**
+     * Lock por progresso / pré-requisitos (null = sem trava por progresso).
+     *
+     * @param  array{bypass?: bool, product?: Product, user?: User, course_percent?: int, completed_set?: array}  $releaseCtx
+     * @return array{is_locked: bool, available_at: null, expires_at: null, lock_message: string, lock_reason: string}|null
+     */
+    private function moduleProgressLockPayload(MemberModule $module, array $releaseCtx): ?array
+    {
+        if (! empty($releaseCtx['bypass'])) {
+            return null;
+        }
+
+        $product = $releaseCtx['product'] ?? null;
+        $user = $releaseCtx['user'] ?? null;
+        if (! $product instanceof Product || ! $user instanceof User) {
+            return null;
+        }
+
+        $progressPercent = $module->release_progress_percent;
+        if (is_int($progressPercent) && $progressPercent > 0) {
+            $current = (int) ($releaseCtx['course_percent'] ?? $this->progressService->completionPercent($product, $user));
+            if ($current < $progressPercent) {
+                return [
+                    'is_locked' => true,
+                    'available_at' => null,
+                    'expires_at' => null,
+                    'lock_message' => 'Disponível ao concluir '.$progressPercent.'% do curso (seu progresso: '.$current.'%)',
+                    'lock_reason' => 'progress',
+                ];
+            }
+
+            return null;
+        }
+
+        $requiredIds = $module->release_required_module_ids;
+        if (! is_array($requiredIds) || $requiredIds === []) {
+            return null;
+        }
+
+        $completedSet = $releaseCtx['completed_set'] ?? null;
+        $missing = $this->progressService->incompleteRequiredModuleTitles(
+            $requiredIds,
+            $product,
+            $user,
+            is_array($completedSet) ? $completedSet : null
+        );
+        if ($missing === []) {
+            return null;
+        }
+
+        $list = implode(', ', $missing);
+
+        return [
+            'is_locked' => true,
+            'available_at' => null,
+            'expires_at' => null,
+            'lock_message' => count($missing) === 1
+                ? 'Conclua o módulo: '.$list
+                : 'Conclua os módulos: '.$list,
+            'lock_reason' => 'modules',
+        ];
+    }
+
+    /**
+     * @param  array{bypass?: bool, product?: Product, user?: User, course_percent?: int, completed_set?: array}  $releaseCtx
+     * @return array{is_locked: bool, available_at: ?string, expires_at: ?string, lock_message: ?string, lock_reason: ?string}
+     */
+    private function moduleLockPayload(MemberModule $module, Carbon $accessStartAt, Carbon $now, array $releaseCtx = []): array
+    {
         $expiresAt = $this->accessExpiresAt($module->access_duration_days, $accessStartAt);
+        if ($expiresAt && $expiresAt->lessThanOrEqualTo($now)) {
+            return [
+                'is_locked' => true,
+                'available_at' => null,
+                'expires_at' => $expiresAt->toIso8601String(),
+                'lock_message' => 'Acesso encerrado em '.$expiresAt->format('d/m/Y'),
+                'lock_reason' => 'expired',
+            ];
+        }
+
+        $progressLock = $this->moduleProgressLockPayload($module, $releaseCtx);
+        if ($progressLock !== null) {
+            return [
+                ...$progressLock,
+                'expires_at' => $expiresAt?->toIso8601String(),
+            ];
+        }
+
+        $meta = $this->scheduleMeta($module->release_after_days, $module->release_at_date, $accessStartAt);
 
         return $this->lockPayload($meta['available_at'], $expiresAt, $now, $meta['mode']);
     }
 
-    private function lessonLockPayload(MemberLesson $lesson, ?MemberModule $module, Carbon $accessStartAt, Carbon $now): array
+    /**
+     * @param  array{bypass?: bool, product?: Product, user?: User, course_percent?: int, completed_set?: array}  $releaseCtx
+     * @return array{is_locked: bool, available_at: ?string, expires_at: ?string, lock_message: ?string, lock_reason: ?string}
+     */
+    private function lessonLockPayload(MemberLesson $lesson, ?MemberModule $module, Carbon $accessStartAt, Carbon $now, array $releaseCtx = []): array
     {
+        $lessonExpiresAt = $this->accessExpiresAt($lesson->access_duration_days, $accessStartAt);
+        $moduleExpiresAt = $module ? $this->accessExpiresAt($module->access_duration_days, $accessStartAt) : null;
+        $expiresAt = null;
+        if ($lessonExpiresAt && $moduleExpiresAt) {
+            $expiresAt = $lessonExpiresAt->lessThanOrEqualTo($moduleExpiresAt) ? $lessonExpiresAt : $moduleExpiresAt;
+        } else {
+            $expiresAt = $lessonExpiresAt ?? $moduleExpiresAt;
+        }
+
+        if ($expiresAt && $expiresAt->lessThanOrEqualTo($now)) {
+            return [
+                'is_locked' => true,
+                'available_at' => null,
+                'expires_at' => $expiresAt->toIso8601String(),
+                'lock_message' => 'Acesso encerrado em '.$expiresAt->format('d/m/Y'),
+                'lock_reason' => 'expired',
+            ];
+        }
+
+        if ($module) {
+            $progressLock = $this->moduleProgressLockPayload($module, $releaseCtx);
+            if ($progressLock !== null) {
+                return [
+                    ...$progressLock,
+                    'expires_at' => $expiresAt?->toIso8601String(),
+                ];
+            }
+        }
+
         $lessonMeta = $this->scheduleMeta($lesson->release_after_days, $lesson->release_at_date, $accessStartAt);
         $moduleMeta = $module ? $this->scheduleMeta($module->release_after_days, $module->release_at_date, $accessStartAt) : ['available_at' => null, 'mode' => null];
 
@@ -1868,14 +2033,6 @@ class MemberAreaAppController extends Controller
                 $availableAt = $moduleAt;
                 $mode = $moduleMeta['mode'];
             }
-        }
-        $lessonExpiresAt = $this->accessExpiresAt($lesson->access_duration_days, $accessStartAt);
-        $moduleExpiresAt = $module ? $this->accessExpiresAt($module->access_duration_days, $accessStartAt) : null;
-        $expiresAt = null;
-        if ($lessonExpiresAt && $moduleExpiresAt) {
-            $expiresAt = $lessonExpiresAt->lessThanOrEqualTo($moduleExpiresAt) ? $lessonExpiresAt : $moduleExpiresAt;
-        } else {
-            $expiresAt = $lessonExpiresAt ?? $moduleExpiresAt;
         }
 
         return $this->lockPayload($availableAt, $expiresAt, $now, $mode);
@@ -1905,8 +2062,9 @@ class MemberAreaAppController extends Controller
 
     /**
      * @return list<array{id: int, title: string, thumbnail: ?string, section_title: ?string, first_lesson: array{id: int, title: string}}>
+     * @param  array{bypass?: bool, product?: Product, user?: User, course_percent?: int, completed_set?: array}  $releaseCtx
      */
-    private function nextModulesPayload(Product $product, MemberModule $currentRouteModule, User $user, Carbon $accessStartAt, Carbon $now, int $limit = 6): array
+    private function nextModulesPayload(Product $product, MemberModule $currentRouteModule, User $user, Carbon $accessStartAt, Carbon $now, array $releaseCtx = [], int $limit = 6): array
     {
         $sections = $product->memberSections()
             ->with(['modules' => fn ($q) => $q->orderBy('position')])
@@ -1941,14 +2099,14 @@ class MemberAreaAppController extends Controller
                 continue;
             }
 
-            $lock = $this->moduleLockPayload($routeModule, $accessStartAt, $now);
+            $lock = $this->moduleLockPayload($routeModule, $accessStartAt, $now, $releaseCtx);
             if (($lock['is_locked'] ?? false) === true) {
                 continue;
             }
 
             $effective = $this->resolveContentModuleForWrapper($routeModule);
-            $firstLesson = $effective->lessons->first(function (MemberLesson $lesson) use ($effective, $accessStartAt, $now) {
-                return ($this->lessonLockPayload($lesson, $effective, $accessStartAt, $now)['is_locked'] ?? false) !== true;
+            $firstLesson = $effective->lessons->first(function (MemberLesson $lesson) use ($routeModule, $accessStartAt, $now, $releaseCtx) {
+                return ($this->lessonLockPayload($lesson, $routeModule, $accessStartAt, $now, $releaseCtx)['is_locked'] ?? false) !== true;
             });
 
             if (! $firstLesson) {
@@ -1993,20 +2151,29 @@ class MemberAreaAppController extends Controller
 
     /**
      * @param  list<array{id: int, title: string, thumbnail: ?string, section_title: ?string, first_lesson: array{id: int, title: string}}>  $nextModules
+     * @param  array{bypass?: bool, product?: Product, user?: User, course_percent?: int, completed_set?: array}  $releaseCtx
      * @return array{
      *     prev: array{id: int, title: string}|null,
      *     next: array{id: int, title: string}|null,
      *     next_module: array{id: int, title: string, first_lesson_id: int, first_lesson_title: string}|null
      * }
      */
-    private function lessonNavigationPayload(MemberModule $module, ?MemberLesson $currentLesson, Carbon $accessStartAt, Carbon $now, array $nextModules = []): array
-    {
+    private function lessonNavigationPayload(
+        MemberModule $contentModule,
+        ?MemberLesson $currentLesson,
+        Carbon $accessStartAt,
+        Carbon $now,
+        array $nextModules = [],
+        array $releaseCtx = [],
+        ?MemberModule $lockModule = null,
+    ): array {
         if (! $currentLesson) {
             return ['prev' => null, 'next' => null, 'next_module' => null];
         }
 
-        $unlocked = $module->lessons->filter(function (MemberLesson $lesson) use ($module, $accessStartAt, $now) {
-            return ($this->lessonLockPayload($lesson, $module, $accessStartAt, $now)['is_locked'] ?? false) !== true;
+        $lockModule = $lockModule ?? $contentModule;
+        $unlocked = $contentModule->lessons->filter(function (MemberLesson $lesson) use ($lockModule, $accessStartAt, $now, $releaseCtx) {
+            return ($this->lessonLockPayload($lesson, $lockModule, $accessStartAt, $now, $releaseCtx)['is_locked'] ?? false) !== true;
         })->values();
 
         $index = $unlocked->search(fn (MemberLesson $lesson) => $lesson->id === $currentLesson->id);
@@ -2159,16 +2326,18 @@ class MemberAreaAppController extends Controller
         }
         $accessStartAt = $this->userAccessStartAt($product, $user);
         $now = now();
+        $releaseCtx = $this->makeReleaseContext($product, $user);
         $effectiveModule = $wrapper !== null
             ? $this->resolveContentModuleForWrapper($wrapper)
             : $lesson->module;
-        if ($effectiveModule) {
-            $moduleLock = $this->moduleLockPayload($effectiveModule, $accessStartAt, $now);
+        $lockModule = $wrapper ?? $effectiveModule;
+        if ($lockModule) {
+            $moduleLock = $this->moduleLockPayload($lockModule, $accessStartAt, $now, $releaseCtx);
             if (($moduleLock['is_locked'] ?? false) === true) {
                 abort(403, $moduleLock['lock_message'] ?? 'Módulo ainda não liberado.');
             }
         }
-        $lessonLock = $this->lessonLockPayload($lesson, $effectiveModule, $accessStartAt, $now);
+        $lessonLock = $this->lessonLockPayload($lesson, $lockModule, $accessStartAt, $now, $releaseCtx);
         if (($lessonLock['is_locked'] ?? false) === true) {
             abort(403, $lessonLock['lock_message'] ?? 'Aula ainda não liberada.');
         }

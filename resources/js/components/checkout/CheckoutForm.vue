@@ -400,6 +400,45 @@ const isCardGatewayMercadopago = computed(() => cardGatewaySlug.value === 'merca
 const isCardGatewayAsaas = computed(() => cardGatewaySlug.value === 'asaas');
 const isCardGatewayPagarme = computed(() => cardGatewaySlug.value === 'pagarme');
 const isCardGatewayPaypal = computed(() => cardGatewaySlug.value === 'paypal');
+const coreCardGatewaySlugs = new Set(['stripe', 'efi', 'mercadopago', 'asaas', 'pagarme', 'paypal', 'cajupay']);
+const isPluginCardGateway = computed(() => {
+    const slug = cardGatewaySlug.value;
+    return Boolean(slug) && !coreCardGatewaySlugs.has(slug);
+});
+function getPluginCardTokenizer(slug) {
+    if (typeof window === 'undefined') return null;
+    const fn = window.__GETFY_PLUGIN_CARD_TOKENIZERS__?.[slug];
+    return typeof fn === 'function' ? fn : null;
+}
+async function getPluginPaymentToken() {
+    const slug = cardGatewaySlug.value;
+    const tokenizer = getPluginCardTokenizer(slug);
+    const ctx = {
+        cardNumber: cardNumberDigits.value,
+        expMonth: cardExpMonth.value,
+        expYear: cardExpYear.value,
+        cvv: cardCvv.value,
+        holderName: (cardHolderName.value || form.name || '').trim(),
+        cardGatewayKeys: props.cardGatewayKeys || {},
+        publishableKey: props.cardGatewayKeys?.[slug]?.publishable_key || '',
+        installments: Math.min(props.cardMaxInstallments || 1, Math.max(1, selectedInstallments.value)),
+    };
+    if (tokenizer) {
+        return tokenizer(ctx);
+    }
+    const last4 = String(cardNumberDigits.value || '').slice(-4);
+    return {
+        payment_token: JSON.stringify({
+            provider: slug,
+            number: cardNumberDigits.value,
+            exp_month: cardExpMonth.value,
+            exp_year: cardExpYear.value,
+            cvv: cardCvv.value,
+            holder: ctx.holderName,
+        }),
+        card_mask: last4 ? `****${last4}` : '',
+    };
+}
 /** PayPal como método próprio ou legado sob Cartão */
 const isPaypalCheckout = computed(
     () => form.payment_method === 'paypal' || (form.payment_method === 'card' && isCardGatewayPaypal.value)
@@ -3161,6 +3200,16 @@ function submit() {
                     return;
                 }
             }
+        } else if (isPluginCardGateway.value) {
+            const nameOk = (cardHolderName.value || form.name || '').trim().length >= 3;
+            const numberOk = cardNumberDigits.value.length >= 13 && cardNumberDigits.value.length <= 19;
+            const expOk = cardExpMonth.value.length === 2 && parseInt(cardExpMonth.value, 10) >= 1 && parseInt(cardExpMonth.value, 10) <= 12
+                && (cardExpYear.value.length === 2 || cardExpYear.value.length === 4);
+            const cvvOk = cardCvv.value.length >= 3 && cardCvv.value.length <= 4;
+            if (!nameOk || !numberOk || !expOk || !cvvOk) {
+                cardFormError.value = props.t('checkout.card_fill_all') || 'Preencha todos os dados do cartão corretamente.';
+                return;
+            }
         } else {
             cardFormError.value = props.t('checkout.card_not_configured') || 'Pagamento por cartão não está configurado.';
             return;
@@ -3171,7 +3220,9 @@ function submit() {
             ? getStripePaymentMethod()
             : isCardGatewayPagarme.value
                 ? getPagarmePaymentToken()
-                : getEfiPaymentToken();
+                : isPluginCardGateway.value
+                    ? getPluginPaymentToken()
+                    : getEfiPaymentToken();
         getTokenPromise
             .then(({ payment_token, card_mask }) => {
                 const payload = {

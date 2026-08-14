@@ -237,9 +237,11 @@ class SubscriptionLifecycleService
             return;
         }
 
+        $becamePastDue = false;
         if ($effective === Subscription::STATUS_PAST_DUE
             && $subscription->status === Subscription::STATUS_ACTIVE) {
             $this->markPastDue($subscription);
+            $becamePastDue = true;
         }
 
         if ($effective === Subscription::STATUS_ACTIVE
@@ -247,9 +249,84 @@ class SubscriptionLifecycleService
             $subscription->update(['status' => Subscription::STATUS_ACTIVE, 'past_due_at' => null]);
         }
 
+        // No dia do vencimento e em atraso: gera pedido/PIX automático (e-mail no job diário ou se ainda não enviado).
+        if ($this->shouldAutoBill($subscription, $today, $becamePastDue, $effective)) {
+            try {
+                $fresh = $subscription->fresh(['user', 'product', 'subscriptionPlan']);
+                if ($fresh) {
+                    // E-mail só se ainda não houver lembrete hoje (evita duplicar com send-reminders).
+                    $sendEmail = $this->shouldSendReminderToday($fresh, $today);
+                    app(SubscriptionAutoBillingService::class)->ensureRenewalPayment($fresh, sendEmail: $sendEmail);
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('SubscriptionLifecycle: auto billing falhou.', [
+                    'subscription_id' => $subscription->id,
+                    'message' => $e->getMessage(),
+                ]);
+            }
+        }
+
         if (! $this->hasAccess($subscription, $today)) {
             app(SubscriptionAccessService::class)->revokeAccessForSubscription($subscription);
         }
+    }
+
+    /**
+     * Cobrança automática no vencimento (hoje = period_end) e enquanto past_due.
+     */
+    public function shouldAutoBill(
+        Subscription $subscription,
+        ?Carbon $today = null,
+        bool $becamePastDue = false,
+        ?string $effective = null,
+    ): bool {
+        if (! $this->canRenew($subscription, $today)) {
+            return false;
+        }
+
+        $today = ($today ?? Carbon::today())->startOfDay();
+        $periodEnd = $this->periodEnd($subscription);
+        if ($periodEnd === null) {
+            return false;
+        }
+
+        $effective = $effective ?? $this->effectiveStatus($subscription, $today);
+
+        if ($becamePastDue) {
+            return true;
+        }
+
+        // No dia do vencimento (ainda "active" no DB até o fim do dia)
+        if ($today->equalTo($periodEnd)) {
+            return true;
+        }
+
+        return $effective === Subscription::STATUS_PAST_DUE
+            || $subscription->status === Subscription::STATUS_PAST_DUE;
+    }
+
+    /**
+     * Reconcília assinaturas vencidas de um tenant (ex.: ao abrir o painel sem cron).
+     */
+    public function processStaleForTenant(?int $tenantId, ?Carbon $today = null): void
+    {
+        $today = ($today ?? Carbon::today())->startOfDay();
+
+        $query = Subscription::query()
+            ->with(['user', 'product', 'subscriptionPlan'])
+            ->whereNotNull('current_period_end')
+            ->whereIn('status', [Subscription::STATUS_ACTIVE, Subscription::STATUS_PAST_DUE])
+            ->whereDate('current_period_end', '<', $today->toDateString());
+
+        if ($tenantId !== null) {
+            $query->where('tenant_id', $tenantId);
+        }
+
+        $query->chunkById(50, function ($subscriptions) use ($today) {
+            foreach ($subscriptions as $subscription) {
+                $this->processSubscription($subscription, $today);
+            }
+        });
     }
 
     public function markPastDue(Subscription $subscription): void
@@ -294,21 +371,68 @@ class SubscriptionLifecycleService
     }
 
     /**
+     * @param  array{copy_paste?: ?string, qrcode?: ?string}|null  $pix
      * @return array{subject: string, body: string}
      */
-    public function buildReminderEmail(Subscription $subscription, ?Carbon $today = null): array
-    {
+    public function buildReminderEmail(
+        Subscription $subscription,
+        ?Carbon $today = null,
+        ?array $pix = null,
+        ?\App\Models\Order $order = null,
+    ): array {
         $today = ($today ?? Carbon::today())->startOfDay();
         $user = $subscription->user;
         $product = $subscription->product;
         $plan = $subscription->subscriptionPlan;
         $renewalUrl = url('/renovar/'.$subscription->renewal_token);
+        $pixPayUrl = url('/renovar/'.$subscription->renewal_token.'/pix');
         $productName = e($product?->name ?? 'produto');
         $planName = e($plan?->name ?? 'plano');
         $greeting = $user?->name ? ', '.e($user->name) : '';
 
         $phase = $this->reminderPhase($subscription, $today);
         $daysLeft = $this->daysUntilPeriodEnd($subscription, $today);
+        $hasPix = is_array($pix) && (
+            trim((string) ($pix['copy_paste'] ?? '')) !== ''
+            || trim((string) ($pix['qrcode'] ?? '')) !== ''
+        );
+
+        if ($hasPix) {
+            $subject = 'PIX para renovar: '.($product?->name ?? 'sua assinatura');
+            $body = '<p>Olá'.$greeting.'!</p>';
+            if ($phase === 'before_due' && $daysLeft !== null && $daysLeft === 0) {
+                $body .= '<p>Sua assinatura de <strong>'.$productName.'</strong> (plano '.$planName.') <strong>vence hoje</strong>.</p>';
+            } elseif ($phase === 'grace') {
+                $body .= '<p>Sua assinatura de <strong>'.$productName.'</strong> (plano '.$planName.') <strong>venceu</strong> — pague o PIX abaixo para manter o acesso.</p>';
+            } else {
+                $body .= '<p>Sua assinatura de <strong>'.$productName.'</strong> (plano '.$planName.') está <strong>em atraso</strong>.</p>';
+            }
+            if ($order) {
+                $amount = number_format((float) $order->amount, 2, ',', '.');
+                $body .= '<p><strong>Valor:</strong> R$ '.$amount;
+                if ($order->id) {
+                    $body .= ' · Pedido #'.e((string) $order->id);
+                }
+                $body .= '</p>';
+            }
+            $copy = trim((string) ($pix['copy_paste'] ?? ''));
+            if ($copy !== '') {
+                $body .= '<p><strong>PIX copia e cola:</strong></p>';
+                $body .= '<p style="word-break:break-all;font-family:monospace;font-size:13px;background:#f1f5f9;padding:12px;border-radius:8px;">'.e($copy).'</p>';
+            }
+            $qr = trim((string) ($pix['qrcode'] ?? ''));
+            if ($qr !== '') {
+                $src = str_starts_with($qr, 'data:') ? $qr : 'data:image/png;base64,'.$qr;
+                if (str_starts_with($qr, 'http://') || str_starts_with($qr, 'https://')) {
+                    $src = $qr;
+                }
+                $body .= '<p style="text-align:center;"><img src="'.e($src).'" alt="QR Code PIX" style="max-width:220px;height:auto;" /></p>';
+            }
+            $body .= '<p><a href="'.e($pixPayUrl).'" style="display:inline-block;padding:12px 24px;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:8px;">Ver QR Code e pagar</a></p>';
+            $body .= '<p style="font-size:13px;color:#64748b;">Outras formas de pagamento: <a href="'.e($renewalUrl).'">'.$renewalUrl.'</a></p>';
+
+            return ['subject' => $subject, 'body' => $body];
+        }
 
         if ($phase === 'before_due' && $daysLeft !== null && $daysLeft > 0) {
             $subject = 'Lembrete: sua assinatura de '.($product?->name ?? 'produto').' renova em '.$daysLeft.' dia(s)';
@@ -334,8 +458,8 @@ class SubscriptionLifecycleService
         }
 
         $body .= '<p>Para renovar e manter seu acesso, use o link abaixo:</p>';
-        $body .= '<p><a href="'.e($renewalUrl).'" style="display:inline-block;padding:12px 24px;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:8px;">Renovar agora</a></p>';
-        $body .= '<p>Ou copie e cole no navegador: '.e($renewalUrl).'</p>';
+        $body .= '<p><a href="'.e($pixPayUrl).'" style="display:inline-block;padding:12px 24px;background:#0ea5e9;color:#fff;text-decoration:none;border-radius:8px;">Pagar com PIX agora</a></p>';
+        $body .= '<p>Ou escolha outra forma: <a href="'.e($renewalUrl).'">'.e($renewalUrl).'</a></p>';
 
         return ['subject' => $subject, 'body' => $body];
     }

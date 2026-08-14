@@ -214,7 +214,11 @@ function isPendingAffiliate() {
                         Seus pixels substituem os do produtor no checkout acessado com seu link de afiliado.
                     </p>
                 </div>
-                <ConversionPixelsForm v-model="pixelsForm.affiliate_pixels" />
+                <ConversionPixelsForm
+                    v-model="pixelsForm.affiliate_pixels"
+                    :allow-custom-script="false"
+                    :allow-gtm="false"
+                />
                 <Button variant="primary" :disabled="pixelsForm.processing" @click="savePixels">
                     Salvar pixels
                 </Button>

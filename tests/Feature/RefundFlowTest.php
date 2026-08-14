@@ -203,4 +203,145 @@ class RefundFlowTest extends TestCase
         $this->assertSame('refunded', $order->status);
         $this->assertFalse($product->users()->where('user_id', $buyer->id)->exists());
     }
+
+    public function test_vendas_refund_calls_cajupay_pix_refund_api(): void
+    {
+        $this->withoutMiddleware(EnsureInstalled::class);
+
+        $paymentId = (string) Str::uuid();
+        $refundId = (string) Str::uuid();
+        $tenantId = 1;
+        $admin = User::factory()->create(['tenant_id' => $tenantId, 'role' => User::ROLE_INFOPRODUTOR]);
+        $buyer = User::factory()->create(['tenant_id' => $tenantId, 'role' => User::ROLE_ALUNO]);
+        $product = $this->createTestProduct(['name' => 'Curso', 'type' => Product::TYPE_AREA_MEMBROS]);
+
+        $order = Order::create([
+            'tenant_id' => $tenantId,
+            'user_id' => $buyer->id,
+            'product_id' => $product->id,
+            'amount' => 50,
+            'currency' => 'BRL',
+            'email' => $buyer->email,
+            'status' => 'completed',
+            'gateway' => 'cajupay',
+            'gateway_id' => $paymentId,
+            'metadata' => [
+                'checkout_payment_method' => 'pix',
+                'cajupay_payment_id' => $paymentId,
+            ],
+        ]);
+
+        $credential = new GatewayCredential([
+            'tenant_id' => $tenantId,
+            'gateway_slug' => 'cajupay',
+            'is_connected' => true,
+        ]);
+        $credential->setEncryptedCredentials(['public_key' => 'pk_test', 'secret_key' => 'sk_test']);
+        $credential->save();
+
+        Http::fake(function (\Illuminate\Http\Client\Request $request) use ($paymentId, $refundId, $order) {
+            $path = (string) parse_url($request->url(), PHP_URL_PATH);
+            if ($request->method() === 'POST' && str_ends_with($path, '/pix-refund')) {
+                return Http::response([
+                    'id' => $refundId,
+                    'payment_id' => $paymentId,
+                    'status' => 'submitted',
+                    'client_refund_id' => 'getfy-order-'.$order->id.'-refund',
+                ], 200);
+            }
+            if ($request->method() === 'GET' && str_ends_with($path, '/api/payments/'.$paymentId)) {
+                return Http::response([
+                    'payment_id' => $paymentId,
+                    'status' => 'paid',
+                    'amount_cents' => 5000,
+                ], 200);
+            }
+
+            return Http::response(['error' => 'unexpected_url', 'url' => $request->url()], 500);
+        });
+
+        $response = $this->actingAs($admin)->postJson("/vendas/{$order->id}/refund");
+
+        $response->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('auto_cajupay_pix', true);
+
+        $this->assertDatabaseHas('refund_requests', [
+            'order_id' => $order->id,
+            'status' => RefundRequest::STATUS_PROCESSING,
+            'cajupay_payment_id' => $paymentId,
+            'cajupay_refund_id' => $refundId,
+        ]);
+
+        $order->refresh();
+        $this->assertSame('completed', $order->status);
+
+        Http::assertSent(function ($request) use ($paymentId, $order) {
+            return $request->method() === 'POST'
+                && str_contains($request->url(), "/api/payments/{$paymentId}/pix-refund")
+                && ! str_contains($request->url(), '/retry')
+                && ($request['client_refund_id'] ?? null) === 'getfy-order-'.$order->id.'-refund';
+        });
+    }
+
+    public function test_vendas_refund_maps_cajupay_api_error(): void
+    {
+        $this->withoutMiddleware(EnsureInstalled::class);
+
+        $paymentId = (string) Str::uuid();
+        $tenantId = 1;
+        $admin = User::factory()->create(['tenant_id' => $tenantId, 'role' => User::ROLE_INFOPRODUTOR]);
+        $buyer = User::factory()->create(['tenant_id' => $tenantId, 'role' => User::ROLE_ALUNO]);
+        $product = $this->createTestProduct(['name' => 'Curso', 'type' => Product::TYPE_AREA_MEMBROS]);
+
+        $order = Order::create([
+            'tenant_id' => $tenantId,
+            'user_id' => $buyer->id,
+            'product_id' => $product->id,
+            'amount' => 50,
+            'currency' => 'BRL',
+            'email' => $buyer->email,
+            'status' => 'completed',
+            'gateway' => 'cajupay',
+            'gateway_id' => $paymentId,
+            'metadata' => [
+                'checkout_payment_method' => 'pix',
+                'cajupay_payment_id' => $paymentId,
+            ],
+        ]);
+
+        $credential = new GatewayCredential([
+            'tenant_id' => $tenantId,
+            'gateway_slug' => 'cajupay',
+            'is_connected' => true,
+        ]);
+        $credential->setEncryptedCredentials(['public_key' => 'pk_test', 'secret_key' => 'sk_test']);
+        $credential->save();
+
+        Http::fake(function (\Illuminate\Http\Client\Request $request) use ($paymentId) {
+            $path = (string) parse_url($request->url(), PHP_URL_PATH);
+            if ($request->method() === 'POST' && str_ends_with($path, '/pix-refund')) {
+                return Http::response(['error' => 'med_blocks_refund'], 400);
+            }
+            if ($request->method() === 'GET' && str_ends_with($path, '/api/payments/'.$paymentId)) {
+                return Http::response([
+                    'payment_id' => $paymentId,
+                    'status' => 'paid',
+                    'amount_cents' => 5000,
+                ], 200);
+            }
+
+            return Http::response(['error' => 'unexpected_url'], 500);
+        });
+
+        $response = $this->actingAs($admin)->postJson("/vendas/{$order->id}/refund");
+
+        $response->assertStatus(422)
+            ->assertJsonPath('success', false);
+        $this->assertStringContainsString('MED', (string) $response->json('message'));
+        $this->assertDatabaseHas('refund_requests', [
+            'order_id' => $order->id,
+            'status' => RefundRequest::STATUS_FAILED,
+        ]);
+    }
 }

@@ -207,6 +207,7 @@ class PluginExtensionRegistry
                     ? $frontend['exports']
                     : [],
                 'frontend_pages' => $pages,
+                'checkout_gateway_slug' => trim((string) ($frontend['checkout_gateway_slug'] ?? '')),
             ];
         }
 

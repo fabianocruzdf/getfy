@@ -9,8 +9,11 @@ use App\Models\GatewayCredential;
 use App\Models\Order;
 use App\Models\PayoutRequest;
 use App\Models\RefundRequest;
+use App\Models\Subscription;
 use App\Services\PayoutService;
 use App\Services\RefundService;
+use App\Services\CajuPaySubscriptionService;
+use App\Services\SubscriptionLifecycleService;
 use App\Support\CajuPayPaymentId;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -76,8 +79,18 @@ class CajuPayWebhookController extends Controller
         $object = $this->extractObject($payload);
         $sessionId = $this->pickSessionId($object);
         $paymentId = CajuPayPaymentId::pickFromWebhookObject($object);
+        $subscriptionId = $this->pickSubscriptionId($object);
 
         $order = $this->findOrderForWebhook($sessionId, $paymentId, $object);
+        if ($order === null && $subscriptionId !== '') {
+            $order = Order::where('gateway', self::SLUG)
+                ->where(function ($q) use ($subscriptionId) {
+                    $q->where('gateway_id', $subscriptionId)
+                        ->orWhere('metadata->cajupay_subscription_id', $subscriptionId);
+                })
+                ->orderByDesc('id')
+                ->first();
+        }
 
         $signingSecret = $this->resolveSigningSecret($raw, (string) $signatureTs, $signatureHex, $order?->tenant_id);
         if ($signingSecret === null) {
@@ -85,10 +98,15 @@ class CajuPayWebhookController extends Controller
                 'event' => $eventType,
                 'payment_id' => $paymentId,
                 'session_id' => $sessionId,
+                'subscription_id' => $subscriptionId,
                 'order_id' => $order?->id,
             ]);
 
             return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        if (str_starts_with($eventType, 'subscription.')) {
+            return $this->handleSubscriptionEvent($eventType, $object, $order, $payload, $paymentId, $subscriptionId);
         }
 
         if ($order === null) {
@@ -123,14 +141,19 @@ class CajuPayWebhookController extends Controller
         }
 
         if ($paymentId !== '' && $order->gateway_id !== $paymentId) {
-            try {
-                $order->update(['gateway_id' => $paymentId]);
-                $order->refresh();
-            } catch (\Throwable $e) {
-                Log::debug('CajuPayWebhook: falha ao atualizar gateway_id', [
-                    'order_id' => $order->id,
-                    'error' => $e->getMessage(),
-                ]);
+            $meta = is_array($order->metadata) ? $order->metadata : [];
+            $preservePixAutoSubscriptionId = ($meta['checkout_payment_method'] ?? '') === 'pix_auto'
+                && trim((string) ($meta['cajupay_subscription_id'] ?? $order->gateway_id ?? '')) !== '';
+            if (! $preservePixAutoSubscriptionId) {
+                try {
+                    $order->update(['gateway_id' => $paymentId]);
+                    $order->refresh();
+                } catch (\Throwable $e) {
+                    Log::debug('CajuPayWebhook: falha ao atualizar gateway_id', [
+                        'order_id' => $order->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
         }
 
@@ -397,9 +420,256 @@ class CajuPayWebhookController extends Controller
                     return $refundRequest->order;
                 }
             }
+
+            $subscriptionId = $this->pickSubscriptionId($object);
+            if ($subscriptionId !== '') {
+                $order = Order::where('gateway', self::SLUG)
+                    ->where(function ($q) use ($subscriptionId) {
+                        $q->where('gateway_id', $subscriptionId)
+                            ->orWhere('metadata->cajupay_subscription_id', $subscriptionId);
+                    })
+                    ->orderByDesc('id')
+                    ->first();
+                if ($order) {
+                    return $order;
+                }
+            }
+
+            $correlationId = $object['correlation_id'] ?? ($object['billing_order_id'] ?? null);
+            if (is_string($correlationId) && str_starts_with($correlationId, 'order-')) {
+                $orderId = (int) substr($correlationId, strlen('order-'));
+                if ($orderId > 0) {
+                    $order = Order::query()->where('id', $orderId)->where('gateway', self::SLUG)->first();
+                    if ($order) {
+                        return $order;
+                    }
+                }
+            }
         }
 
         return null;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $object
+     * @param  array<string, mixed>  $payload
+     */
+    private function handleSubscriptionEvent(
+        string $eventType,
+        ?array $object,
+        ?Order $order,
+        array $payload,
+        string $paymentId,
+        string $subscriptionId,
+    ): JsonResponse {
+        $object = is_array($object) ? $object : [];
+        if ($subscriptionId === '') {
+            $subscriptionId = $this->pickSubscriptionId($object);
+        }
+
+        if ($order === null) {
+            $order = $this->findOrderForWebhook(null, $paymentId, $object);
+        }
+
+        $localSub = null;
+        if ($subscriptionId !== '') {
+            $localSub = Subscription::query()
+                ->where('gateway_subscription_id', $subscriptionId)
+                ->first();
+        }
+
+        $webhookMeta = array_merge($payload, ['webhook_source' => 'cajupay_hmac_verified']);
+        $dispatchId = $paymentId !== ''
+            ? $paymentId
+            : (string) ($order?->gateway_id ?: $subscriptionId);
+
+        switch ($eventType) {
+            case 'subscription.approved':
+                if ($order) {
+                    $meta = is_array($order->metadata) ? $order->metadata : [];
+                    $meta['cajupay_subscription_status'] = 'approved';
+                    if ($subscriptionId !== '') {
+                        $meta['cajupay_subscription_id'] = $subscriptionId;
+                    }
+                    $order->update(['metadata' => $meta]);
+                }
+                break;
+
+            case 'subscription.rejected':
+                if ($order && $order->status === 'pending' && $dispatchId !== '') {
+                    ProcessPaymentWebhook::dispatchSync(self::SLUG, $dispatchId, 'order.rejected', 'rejected', $webhookMeta);
+                }
+                if ($localSub && $localSub->status !== Subscription::STATUS_CANCELLED) {
+                    app(SubscriptionLifecycleService::class)->cancelSubscription($localSub, revokeAccessNow: true);
+                }
+                break;
+
+            case 'subscription.charge.created':
+                if ($order) {
+                    $meta = is_array($order->metadata) ? $order->metadata : [];
+                    $chargeId = (string) ($object['id'] ?? $object['charge_id'] ?? '');
+                    if ($chargeId !== '') {
+                        $meta['cajupay_last_charge_id'] = $chargeId;
+                    }
+                    $order->update(['metadata' => $meta]);
+                }
+                break;
+
+            case 'subscription.charge.paid':
+                if ($order && $order->status === 'pending') {
+                    app(CajuPaySubscriptionService::class)->reconcilePendingOrderFromPaidCharge(
+                        $order,
+                        $object,
+                        'cajupay_webhook',
+                        'cajupay_hmac_verified'
+                    );
+                    break;
+                }
+
+                if ($localSub) {
+                    $this->renewLocalSubscriptionFromCharge($localSub, $object, $paymentId);
+                } elseif ($order && $order->status === 'completed') {
+                    $sub = Subscription::query()
+                        ->where('user_id', $order->user_id)
+                        ->where('product_id', $order->product_id)
+                        ->where('subscription_plan_id', $order->subscription_plan_id)
+                        ->whereIn('status', [Subscription::STATUS_ACTIVE, Subscription::STATUS_PAST_DUE])
+                        ->first();
+                    if ($sub) {
+                        if ($subscriptionId !== '' && empty($sub->gateway_subscription_id)) {
+                            $sub->update(['gateway_subscription_id' => $subscriptionId]);
+                        }
+                        $this->renewLocalSubscriptionFromCharge($sub->fresh(), $object, $paymentId);
+                    }
+                } else {
+                    Log::debug('CajuPayWebhook: subscription.charge.paid sem pedido/assinatura', [
+                        'subscription_id' => $subscriptionId,
+                        'payment_id' => $paymentId,
+                    ]);
+                }
+                break;
+
+            case 'subscription.charge.failed':
+                if ($localSub && $localSub->status === Subscription::STATUS_ACTIVE) {
+                    app(SubscriptionLifecycleService::class)->markPastDue($localSub);
+                }
+                break;
+
+            case 'subscription.charge.refunded':
+                if ($order && $order->status === 'completed' && $dispatchId !== '') {
+                    ProcessPaymentWebhook::dispatchSync(self::SLUG, $dispatchId, 'order.refunded', 'refunded', $webhookMeta);
+                }
+                break;
+
+            default:
+                Log::debug('CajuPayWebhook: subscription event não tratado', ['event' => $eventType]);
+                break;
+        }
+
+        return response()->json(['received' => true]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $object
+     */
+    private function renewLocalSubscriptionFromCharge(Subscription $subscription, array $object, string $paymentId): void
+    {
+        $subscription->loadMissing(['subscriptionPlan', 'user', 'product']);
+        $plan = $subscription->subscriptionPlan;
+        if (! $plan) {
+            return;
+        }
+
+        [$periodStart, $periodEnd] = $plan->getCurrentPeriod();
+        $subscription->update([
+            'status' => Subscription::STATUS_ACTIVE,
+            'current_period_start' => $periodStart,
+            'current_period_end' => $periodEnd,
+            'past_due_at' => null,
+        ]);
+
+        event(new \App\Events\SubscriptionRenewed($subscription->fresh()));
+
+        if ($subscription->user_id && $subscription->product_id) {
+            $subscription->product?->users()->syncWithoutDetaching([$subscription->user_id]);
+        }
+
+        // Pedido de renovação contábil (já liquidado na CajuPay)
+        $chargeId = (string) ($object['id'] ?? $object['charge_id'] ?? '');
+        $exists = Order::query()
+            ->where('gateway', self::SLUG)
+            ->where('user_id', $subscription->user_id)
+            ->where('subscription_plan_id', $subscription->subscription_plan_id)
+            ->where('is_renewal', true)
+            ->where(function ($q) use ($chargeId, $paymentId) {
+                if ($chargeId !== '') {
+                    $q->orWhere('metadata->cajupay_charge_id', $chargeId);
+                }
+                if ($paymentId !== '') {
+                    $q->orWhere('metadata->cajupay_payment_id', $paymentId)
+                        ->orWhere('gateway_id', $paymentId);
+                }
+            })
+            ->exists();
+
+        if ($exists) {
+            return;
+        }
+
+        $amount = (float) $plan->price;
+        $order = Order::create([
+            'tenant_id' => $subscription->tenant_id,
+            'user_id' => $subscription->user_id,
+            'product_id' => $subscription->product_id,
+            'subscription_plan_id' => $subscription->subscription_plan_id,
+            'amount' => $amount,
+            'currency' => $plan->getCurrencyOrDefault(),
+            'email' => $subscription->user?->email,
+            'status' => 'completed',
+            'gateway' => self::SLUG,
+            'gateway_id' => $paymentId !== '' ? $paymentId : ($chargeId !== '' ? $chargeId : $subscription->gateway_subscription_id),
+            'is_renewal' => true,
+            'period_start' => $periodStart,
+            'period_end' => $periodEnd,
+            'metadata' => [
+                'checkout_payment_method' => 'pix_auto',
+                'cajupay_subscription_id' => $subscription->gateway_subscription_id,
+                'cajupay_charge_id' => $chargeId !== '' ? $chargeId : null,
+                'cajupay_payment_id' => $paymentId !== '' ? $paymentId : null,
+                'auto_renewal_subscription_id' => $subscription->id,
+            ],
+        ]);
+
+        event(new \App\Events\OrderCompleted($order));
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $object
+     */
+    private function pickSubscriptionId(?array $object): string
+    {
+        if ($object === null) {
+            return '';
+        }
+        foreach (['subscription_id', 'cajupay_subscription_id'] as $key) {
+            $value = $object[$key] ?? null;
+            if (is_string($value) && $value !== '') {
+                return $value;
+            }
+        }
+        // Em alguns eventos o id do objeto é a própria assinatura
+        $typeHint = strtolower((string) ($object['object'] ?? $object['type'] ?? ''));
+        if (str_contains($typeHint, 'subscription') || ! isset($object['charge_id'])) {
+            $id = $object['id'] ?? null;
+            if (is_string($id) && $id !== '' && preg_match('/^[0-9a-f-]{36}$/i', $id)) {
+                // Prefer explicit subscription_id; only use id when no payment_id-like fields
+                if (! isset($object['amount_cents']) || isset($object['frequency'])) {
+                    return $id;
+                }
+            }
+        }
+
+        return '';
     }
 
     /**

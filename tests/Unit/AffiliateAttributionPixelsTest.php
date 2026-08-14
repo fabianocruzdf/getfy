@@ -106,4 +106,46 @@ class AffiliateAttributionPixelsTest extends TestCase
         $this->assertSame('aff-root', $result['meta']['entries'][0]['pixel_id']);
         $this->assertSame('aff-root-tok', $result['meta']['entries'][0]['access_token']);
     }
+
+    public function test_affiliate_custom_script_is_stripped_from_checkout_pixels(): void
+    {
+        $this->withoutMiddleware(EnsureInstalled::class);
+
+        $product = $this->createTestProduct([
+            'conversion_pixels' => [
+                'meta' => ['enabled' => true, 'entries' => [['id' => 'p', 'pixel_id' => 'prod', 'access_token' => '']]],
+                'tiktok' => ['enabled' => false, 'entries' => []],
+                'google_ads' => ['enabled' => false, 'entries' => []],
+                'google_analytics' => ['enabled' => false, 'entries' => []],
+                'custom_script' => [],
+            ],
+        ]);
+
+        $user = User::factory()->create(['role' => User::ROLE_AFILIADO, 'tenant_id' => $product->tenant_id]);
+
+        ProductAffiliate::create([
+            'product_id' => $product->id,
+            'user_id' => $user->id,
+            'affiliate_code' => 'xssref',
+            'status' => ProductAffiliate::STATUS_APPROVED,
+            'affiliate_pixels' => [
+                'meta' => ['enabled' => true, 'entries' => [['id' => 'a', 'pixel_id' => 'aff', 'access_token' => '']]],
+                'tiktok' => ['enabled' => false, 'entries' => []],
+                'google_ads' => ['enabled' => false, 'entries' => []],
+                'google_analytics' => ['enabled' => false, 'entries' => []],
+                'gtm' => ['enabled' => true, 'container_id' => 'GTM-EVIL'],
+                'custom_script' => [
+                    ['id' => 'x', 'name' => 'xss', 'script' => '<script>alert(1)</script>'],
+                ],
+                'custom_script_integration_ids' => [99],
+            ],
+        ]);
+
+        $result = AffiliateAttribution::conversionPixelsForCheckoutRaw($product->fresh(), 'xssref');
+
+        $this->assertSame('aff', $result['meta']['entries'][0]['pixel_id'] ?? null);
+        $this->assertSame([], $result['custom_script'] ?? []);
+        $this->assertSame([], $result['custom_script_integration_ids'] ?? []);
+        $this->assertFalse((bool) ($result['gtm']['enabled'] ?? false));
+    }
 }

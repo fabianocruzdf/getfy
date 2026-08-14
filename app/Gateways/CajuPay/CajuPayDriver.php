@@ -599,7 +599,7 @@ class CajuPayDriver implements GatewayDriver
                 ->post('/api/webhooks/endpoints/register', [
                     'url' => $url,
                     'description' => $desc,
-                    'event_types' => ['checkout.payment.*', 'pix.payment.*', 'payout.*', 'pix_parcelado.*'],
+                    'event_types' => ['checkout.payment.*', 'pix.payment.*', 'payout.*', 'pix_parcelado.*', 'subscription.*'],
                     'rotate_if_exists' => $rotateIfExists,
                 ]);
         } catch (\Throwable $e) {
@@ -735,6 +735,7 @@ class CajuPayDriver implements GatewayDriver
 
     /**
      * Resolve CajuPay payment_id (UUID) for refund API.
+     * Prefer UUID persistido; valida via GET /api/payments/{id} quando há API keys.
      */
     public function resolvePaymentIdForOrder(Order $order): ?string
     {
@@ -742,61 +743,78 @@ class CajuPayDriver implements GatewayDriver
             return null;
         }
 
-        $meta = $order->metadata ?? [];
-        $stored = $meta['cajupay_payment_id'] ?? null;
-        if (is_string($stored) && $stored !== '' && $this->looksLikeUuid($stored)) {
-            return $stored;
-        }
+        $meta = is_array($order->metadata) ? $order->metadata : [];
+        $sessionId = trim((string) ($meta['cajupay_checkout_session_id'] ?? ''));
+        $gatewayId = trim((string) ($order->gateway_id ?? ''));
 
-        $gatewayId = (string) ($order->gateway_id ?? '');
-        $sessionId = (string) ($meta['cajupay_checkout_session_id'] ?? '');
+        $candidates = [];
+        foreach (['cajupay_payment_id', 'payment_id'] as $key) {
+            $stored = $meta[$key] ?? null;
+            if (is_string($stored) && $this->looksLikeUuid(trim($stored))) {
+                $candidates[] = trim($stored);
+            }
+        }
         if ($gatewayId !== '' && $this->looksLikeUuid($gatewayId) && $gatewayId !== $sessionId) {
-            return $gatewayId;
+            $candidates[] = $gatewayId;
         }
-        if ($gatewayId !== '' && $this->looksLikeUuid($gatewayId) && $sessionId === '') {
-            return $gatewayId;
+        if ($gatewayId !== '' && $this->looksLikeUuid($gatewayId) && $sessionId === '' && ! in_array($gatewayId, $candidates, true)) {
+            $candidates[] = $gatewayId;
         }
+        $candidates = array_values(array_unique($candidates));
 
         $credential = GatewayCredential::forTenant($order->tenant_id)
             ->where('gateway_slug', 'cajupay')
             ->where('is_connected', true)
             ->first();
+
         if (! $credential) {
-            return null;
+            return $candidates[0] ?? null;
         }
 
         $credentials = $credential->getDecryptedCredentials();
         if (! $this->hasApiKeys($credentials)) {
-            return null;
+            return $candidates[0] ?? null;
         }
 
-        $lookupIds = array_values(array_unique(array_filter([
-            $gatewayId,
-            $sessionId,
-        ])));
+        foreach ($candidates as $candidate) {
+            $payment = $this->fetchPaymentById($candidate, $credentials);
+            if ($payment === null) {
+                continue;
+            }
+            $pid = $this->extractPaymentIdFromPaymentPayload($payment) ?? $candidate;
+            if ($this->looksLikeUuid($pid)) {
+                return $pid;
+            }
+        }
 
+        $sessionToken = trim((string) ($meta['cajupay_session_token'] ?? ''));
+        foreach (array_values(array_unique(array_filter([$sessionId, $sessionToken, $gatewayId]))) as $sessionCandidate) {
+            if ($sessionCandidate === '' || (! $this->looksLikeUuid($sessionCandidate) && ! $this->looksLikeSdkSessionToken($sessionCandidate))) {
+                continue;
+            }
+            $fromSession = $this->extractPaymentIdFromPublicSdkSession($sessionCandidate, $credentials);
+            if ($fromSession !== null) {
+                $payment = $this->fetchPaymentById($fromSession, $credentials);
+                if ($payment !== null) {
+                    return $this->extractPaymentIdFromPaymentPayload($payment) ?? $fromSession;
+                }
+
+                return $fromSession;
+            }
+        }
+
+        $lookupIds = array_values(array_unique(array_filter([$gatewayId, $sessionId, ...$candidates])));
         foreach ($lookupIds as $lookupId) {
             if ($lookupId === '' || ! $this->looksLikeUuid($lookupId)) {
                 continue;
             }
-            $resolved = $this->findPaymentIdInList($lookupId, $credentials);
+            $resolved = $this->findPaymentIdInList($lookupId, $credentials, (int) $order->id);
             if ($resolved !== null) {
                 return $resolved;
             }
         }
 
-        $sessionToken = (string) ($meta['cajupay_session_token'] ?? '');
-        foreach (array_values(array_unique(array_filter([$sessionId, $sessionToken, $gatewayId]))) as $sessionCandidate) {
-            if ($sessionCandidate === '' || ! $this->looksLikeUuid($sessionCandidate)) {
-                continue;
-            }
-            $fromSession = $this->extractPaymentIdFromPublicSdkSession($sessionCandidate, $credentials);
-            if ($fromSession !== null) {
-                return $fromSession;
-            }
-        }
-
-        return null;
+        return $this->findPaymentIdInList('', $credentials, (int) $order->id);
     }
 
     /**
@@ -865,7 +883,7 @@ class CajuPayDriver implements GatewayDriver
     /**
      * @param  array<string, mixed>  $credentials
      */
-    private function findPaymentIdInList(string $transactionId, array $credentials): ?string
+    private function findPaymentIdInList(string $transactionId, array $credentials, ?int $orderId = null): ?string
     {
         try {
             $response = $this->httpForCredentials($credentials)
@@ -875,29 +893,95 @@ class CajuPayDriver implements GatewayDriver
                 return null;
             }
 
-            $list = $response->json();
-            if (! is_array($list)) {
-                return null;
-            }
+            $list = $this->normalizePaymentsList($response->json());
 
             foreach ($list as $item) {
                 if (! is_array($item)) {
                     continue;
                 }
-                $pid = $item['payment_id'] ?? null;
-                if (! is_string($pid) || $pid === '') {
+                $pid = $item['payment_id'] ?? $item['id'] ?? null;
+                if (! is_string($pid) || $pid === '' || ! $this->looksLikeUuid($pid)) {
                     continue;
                 }
-                if ($pid === $transactionId) {
+                if ($transactionId !== '' && $pid === $transactionId) {
                     return $pid;
                 }
                 $session = $item['checkout_session_id'] ?? null;
-                if (is_string($session) && $session === $transactionId) {
+                if ($transactionId !== '' && is_string($session) && $session === $transactionId) {
                     return $pid;
+                }
+                if ($orderId !== null && $orderId > 0) {
+                    $customerRef = (string) ($item['customer_ref'] ?? '');
+                    $productRef = (string) ($item['product_ref'] ?? '');
+                    if ($customerRef === 'getfy-order-'.$orderId || $productRef === 'order-'.$orderId) {
+                        return $pid;
+                    }
                 }
             }
         } catch (\Throwable $e) {
             Log::debug('CajuPayDriver findPaymentIdInList', ['message' => $e->getMessage()]);
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  mixed  $payload
+     * @return list<array<string, mixed>>
+     */
+    private function normalizePaymentsList(mixed $payload): array
+    {
+        if (! is_array($payload)) {
+            return [];
+        }
+
+        if (isset($payload['items']) && is_array($payload['items'])) {
+            $payload = $payload['items'];
+        } elseif (isset($payload['data']) && is_array($payload['data'])) {
+            $payload = $payload['data'];
+        }
+
+        return array_values(array_filter($payload, static fn ($it) => is_array($it)));
+    }
+
+    /**
+     * @param  array<string, mixed>  $credentials
+     * @return array<string, mixed>|null
+     */
+    private function fetchPaymentById(string $paymentId, array $credentials): ?array
+    {
+        if ($paymentId === '' || ! $this->looksLikeUuid($paymentId)) {
+            return null;
+        }
+
+        try {
+            $response = $this->httpForCredentials($credentials)
+                ->get('/api/payments/'.urlencode($paymentId));
+
+            if (! $response->successful()) {
+                return null;
+            }
+
+            $data = $response->json();
+
+            return is_array($data) ? $data : null;
+        } catch (\Throwable $e) {
+            Log::debug('CajuPayDriver fetchPaymentById', ['message' => $e->getMessage()]);
+
+            return null;
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function extractPaymentIdFromPaymentPayload(array $data): ?string
+    {
+        foreach (['payment_id', 'id', 'cajupay_payment_id'] as $key) {
+            $value = $data[$key] ?? null;
+            if (is_string($value) && $value !== '' && $this->looksLikeUuid($value)) {
+                return $value;
+            }
         }
 
         return null;
@@ -913,6 +997,10 @@ class CajuPayDriver implements GatewayDriver
             throw new \RuntimeException('CajuPay: configure as chaves de API para reembolso PIX.');
         }
 
+        if (! $this->looksLikeUuid($paymentId)) {
+            throw new \RuntimeException('CajuPay reembolso: payment_id inválido (esperado UUID CajuPay).');
+        }
+
         $body = [];
         if ($clientRefundId !== null && $clientRefundId !== '') {
             $body['client_refund_id'] = $clientRefundId;
@@ -922,16 +1010,74 @@ class CajuPayDriver implements GatewayDriver
             ->post('/api/payments/'.urlencode($paymentId).'/pix-refund', $body);
 
         if (! $response->successful()) {
-            $msg = $response->body();
-            if (strlen($msg) > 300) {
-                $msg = substr($msg, 0, 300).'…';
+            $errorCode = $this->extractApiErrorCode((string) $response->body());
+            // Pedido já existe em failed/pending_balance — retoma via retry (módulo 18).
+            if ($response->status() === 409
+                || str_starts_with($errorCode, 'refund_not_eligible')
+                || $errorCode === 'refund_failed') {
+                $existing = $this->getPixRefund($paymentId, $credentials);
+                $existingStatus = is_array($existing) ? strtolower((string) ($existing['status'] ?? '')) : '';
+                if (in_array($existingStatus, ['failed', 'pending_balance'], true)) {
+                    return $this->retryPixRefund($paymentId, $credentials);
+                }
             }
-            throw new \RuntimeException('CajuPay reembolso: '.($msg !== '' ? $msg : 'Erro ao solicitar reembolso PIX.'));
+
+            throw new \RuntimeException('CajuPay reembolso: '.$this->formatApiErrorMessage(
+                (string) $response->body(),
+                'Erro ao solicitar reembolso PIX.'
+            ));
         }
 
         $data = $response->json();
         if (! is_array($data)) {
             throw new \RuntimeException('CajuPay reembolso: resposta inválida.');
+        }
+
+        $status = strtolower((string) ($data['status'] ?? ''));
+        if ($status === 'failed') {
+            try {
+                $retried = $this->retryPixRefund($paymentId, $credentials);
+                $retryStatus = strtolower((string) ($retried['status'] ?? ''));
+                if ($retryStatus !== 'failed') {
+                    return $retried;
+                }
+                $data = $retried;
+            } catch (\Throwable $e) {
+                Log::debug('CajuPayDriver createPixRefund retry após failed', ['message' => $e->getMessage()]);
+            }
+
+            $lastError = trim((string) ($data['last_error'] ?? ''));
+            throw new \RuntimeException(
+                'CajuPay reembolso: '.($lastError !== '' ? $lastError : 'Falha ao enviar reembolso ao provedor (status failed).')
+            );
+        }
+
+        return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $credentials
+     * @return array<string, mixed>
+     */
+    public function retryPixRefund(string $paymentId, array $credentials): array
+    {
+        if (! $this->hasApiKeys($credentials)) {
+            throw new \RuntimeException('CajuPay: configure as chaves de API para reembolso PIX.');
+        }
+
+        $response = $this->httpForCredentials($credentials)
+            ->post('/api/payments/'.urlencode($paymentId).'/pix-refund/retry');
+
+        if (! $response->successful()) {
+            throw new \RuntimeException('CajuPay reembolso: '.$this->formatApiErrorMessage(
+                (string) $response->body(),
+                'Erro ao retentar reembolso PIX.'
+            ));
+        }
+
+        $data = $response->json();
+        if (! is_array($data)) {
+            throw new \RuntimeException('CajuPay reembolso: resposta inválida no retry.');
         }
 
         return $data;
@@ -1489,6 +1635,176 @@ class CajuPayDriver implements GatewayDriver
     }
 
     /**
+     * @param  array<string, mixed>  $credentials
+     * @param  array<string, mixed>  $body
+     * @return array<string, mixed>
+     */
+    public function createSubscription(array $credentials, array $body, string $idempotencyKey): array
+    {
+        if (! $this->hasApiKeys($credentials)) {
+            throw new \RuntimeException('CajuPay: configure as chaves de API para assinaturas.');
+        }
+
+        $response = $this->httpForCredentials($credentials)
+            ->withHeaders(['Idempotency-Key' => Str::limit($idempotencyKey, 200, '')])
+            ->post('/api/subscriptions', $body);
+
+        if (! $response->successful()) {
+            throw new \RuntimeException('CajuPay assinatura: '.$this->formatApiErrorMessage(
+                (string) $response->body(),
+                'Erro ao criar assinatura PIX Automático.'
+            ));
+        }
+
+        $data = $response->json();
+        if (! is_array($data)) {
+            throw new \RuntimeException('CajuPay assinatura: resposta inválida.');
+        }
+
+        return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $credentials
+     * @return array<string, mixed>
+     */
+    public function cancelSubscription(array $credentials, string $subscriptionId): array
+    {
+        $response = $this->httpForCredentials($credentials)
+            ->post('/api/subscriptions/'.urlencode($subscriptionId).'/cancel');
+
+        if (! $response->successful()) {
+            throw new \RuntimeException('CajuPay assinatura: '.$this->formatApiErrorMessage(
+                (string) $response->body(),
+                'Erro ao cancelar assinatura.'
+            ));
+        }
+
+        $data = $response->json();
+
+        return is_array($data) ? $data : ['ok' => true];
+    }
+
+    /**
+     * @param  array<string, mixed>  $credentials
+     * @return array<string, mixed>
+     */
+    public function getSubscription(array $credentials, string $subscriptionId): array
+    {
+        $response = $this->httpForCredentials($credentials)
+            ->get('/api/subscriptions/'.urlencode($subscriptionId));
+
+        if (! $response->successful()) {
+            throw new \RuntimeException('CajuPay assinatura: '.$this->formatApiErrorMessage(
+                (string) $response->body(),
+                'Erro ao consultar assinatura.'
+            ));
+        }
+
+        $data = $response->json();
+        if (! is_array($data)) {
+            throw new \RuntimeException('CajuPay assinatura: resposta inválida.');
+        }
+
+        return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $credentials
+     * @return list<array<string, mixed>>
+     */
+    public function listSubscriptionCharges(array $credentials, string $subscriptionId): array
+    {
+        $response = $this->httpForCredentials($credentials)
+            ->get('/api/subscriptions/'.urlencode($subscriptionId).'/charges');
+
+        if (! $response->successful()) {
+            throw new \RuntimeException('CajuPay assinatura: '.$this->formatApiErrorMessage(
+                (string) $response->body(),
+                'Erro ao listar cobranças.'
+            ));
+        }
+
+        $data = $response->json();
+        if (! is_array($data)) {
+            return [];
+        }
+
+        if (isset($data['items']) && is_array($data['items'])) {
+            $data = $data['items'];
+        } elseif (isset($data['charges']) && is_array($data['charges'])) {
+            $data = $data['charges'];
+        } elseif (isset($data['data']) && is_array($data['data'])) {
+            $data = $data['data'];
+        }
+
+        return array_values(array_filter($data, static fn ($it) => is_array($it)));
+    }
+
+    /**
+     * @param  array<string, mixed>  $credentials
+     * @return array<string, mixed>
+     */
+    public function syncSubscription(array $credentials, string $subscriptionId): array
+    {
+        $response = $this->httpForCredentials($credentials)
+            ->post('/api/subscriptions/'.urlencode($subscriptionId).'/sync');
+
+        if (! $response->successful()) {
+            throw new \RuntimeException('CajuPay assinatura: '.$this->formatApiErrorMessage(
+                (string) $response->body(),
+                'Erro ao sincronizar assinatura.'
+            ));
+        }
+
+        $data = $response->json();
+
+        return is_array($data) ? $data : ['ok' => true];
+    }
+
+    /**
+     * @param  array<string, mixed>  $credentials
+     * @return array<string, mixed>
+     */
+    public function retrySubscriptionCharge(array $credentials, string $subscriptionId, string $chargeId): array
+    {
+        $response = $this->httpForCredentials($credentials)
+            ->post('/api/subscriptions/'.urlencode($subscriptionId).'/charges/'.urlencode($chargeId).'/retry');
+
+        if (! $response->successful()) {
+            throw new \RuntimeException('CajuPay assinatura: '.$this->formatApiErrorMessage(
+                (string) $response->body(),
+                'Erro ao retentar cobrança.'
+            ));
+        }
+
+        $data = $response->json();
+
+        return is_array($data) ? $data : ['ok' => true];
+    }
+
+    /**
+     * @param  array<string, mixed>  $credentials
+     * @return array<string, mixed>
+     */
+    public function refundSubscriptionCharge(array $credentials, string $subscriptionId, string $chargeId): array
+    {
+        $response = $this->httpForCredentials($credentials)
+            ->post('/api/subscriptions/'.urlencode($subscriptionId).'/charges/'.urlencode($chargeId).'/refund');
+
+        if (! $response->successful()) {
+            throw new \RuntimeException('CajuPay assinatura: '.$this->formatApiErrorMessage(
+                (string) $response->body(),
+                'Erro ao reembolsar cobrança.'
+            ));
+        }
+
+        $data = $response->json();
+
+        return is_array($data) ? $data : ['ok' => true];
+    }
+
+    /**
      * @param  array<string, mixed>  $body
      */
     private function applyPartnerCheckoutUrl(array &$body, ?string $partnerCheckoutUrl): void
@@ -1501,18 +1817,51 @@ class CajuPayDriver implements GatewayDriver
         $body['partner_checkout_url'] = $url;
     }
 
+    private function extractApiErrorCode(string $body): string
+    {
+        $decoded = json_decode($body, true);
+        if (! is_array($decoded)) {
+            return '';
+        }
+
+        return strtolower(trim((string) ($decoded['error'] ?? '')));
+    }
+
     private function formatApiErrorMessage(string $body, string $fallback): string
     {
         $decoded = json_decode($body, true);
         if (is_array($decoded)) {
             $error = strtolower(trim((string) ($decoded['error'] ?? '')));
-            $friendly = match ($error) {
-                'https_required' => 'A URL do checkout deve usar HTTPS. Verifique APP_URL no servidor.',
-                'invalid_partner_checkout_url' => 'URL do checkout inválida. Verifique APP_URL e o slug do produto.',
+            $friendly = match (true) {
+                $error === 'https_required' => 'A URL do checkout deve usar HTTPS. Verifique APP_URL no servidor.',
+                $error === 'invalid_partner_checkout_url' => 'URL do checkout inválida. Verifique APP_URL e o slug do produto.',
+                $error === 'unauthorized' => 'Credenciais CajuPay inválidas. Reconecte o gateway em Integrações.',
+                $error === 'forbidden' => 'A chave CajuPay precisa do escopo adequado (payments.write / subscriptions.write).',
+                $error === 'payment_not_found' => 'Pagamento não encontrado na CajuPay (UUID inexistente ou de outra conta).',
+                $error === 'invalid_payment_id' => 'O ID do pagamento não é um UUID CajuPay válido.',
+                $error === 'payment_not_paid' => 'O pagamento ainda não está como pago na CajuPay.',
+                $error === 'refund_window_expired' => 'Prazo de reembolso PIX expirado (até 30 dias após o pagamento).',
+                $error === 'med_blocks_refund' => 'Há uma disputa MED aberta neste pagamento. Resolva a MED antes de reembolsar.',
+                $error === 'invalid_client_refund_id' => 'Identificador interno do reembolso inválido.',
+                $error === 'missing_pix_end_to_end_id' => 'Falta o identificador E2E do PIX no provedor. Aguarde a liquidação ou contate o suporte CajuPay.',
+                $error === 'refund_only_onlyup' => 'Este PIX não permite reembolso via API (provedor diferente de OnlyUp). Estorne no painel CajuPay.',
+                $error === 'onlyup_account_missing' => 'Conta OnlyUp não vinculada a este pagamento. Verifique a conta na CajuPay.',
+                $error === 'refund_not_found' => 'Não há pedido de reembolso prévio para este pagamento.',
+                $error === 'refund_failed' => 'A CajuPay não conseguiu processar o reembolso. Tente novamente em instantes.',
+                $error === 'refund_cancelled' => 'O pedido de reembolso foi cancelado na CajuPay.',
+                $error === 'rate_limited' => 'Limite de requisições da CajuPay atingido. Tente novamente em instantes.',
+                $error === 'missing_pix_authorization_payload' => 'A CajuPay não retornou o QR de autorização. Tente novamente.',
+                $error === 'idempotency_key_reuse_mismatch' => 'Chave de idempotência reutilizada com payload diferente. Gere um novo checkout.',
+                str_starts_with($error, 'refund_not_eligible') => 'Este pagamento não está elegível para reembolso no momento ('.$error.').',
                 default => '',
             };
             if ($friendly !== '') {
                 return $friendly;
+            }
+
+            $message = trim((string) ($decoded['message'] ?? $decoded['error'] ?? ''));
+            if ($message !== '') {
+                return $message;
             }
         }
 

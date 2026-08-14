@@ -67,8 +67,16 @@ return [
     'integrax' => [
         'default_from' => env('INTEGRAX_DEFAULT_FROM', ''),
     ],
-    /** Loja pública de plugins (aba Gerenciar plugins → Loja de plugins). */
-    'plugin_store_url' => 'https://store.getfy.cloud',
+    /**
+     * Marketplace público (link aberto no painel → Loja de plugins).
+     * @see https://getfy.org/plugins
+     */
+    'plugin_store_url' => rtrim((string) env('PLUGIN_STORE_URL', env('GETFY_PLUGIN_STORE_URL', 'https://getfy.org/plugins')), '/'),
+
+    /**
+     * Origem da API da loja (listagem, download, licença). Sem o path /plugins.
+     */
+    'plugin_store_api_url' => rtrim((string) env('PLUGIN_STORE_API_URL', 'https://getfy.org'), '/'),
 
     'app_name' => 'Getfy',
     'theme_primary' => '#74d909',

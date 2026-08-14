@@ -125,6 +125,7 @@ Route::get('/plugins/{slug}/assets/{path}', \App\Http\Controllers\PluginAssetCon
     ->name('plugins.asset');
 
 Route::get('/renovar/{token}', [\App\Http\Controllers\RenewalController::class, 'show'])->name('renewal.show')->where('token', '[a-zA-Z0-9]{32,64}');
+Route::get('/renovar/{token}/pix', [\App\Http\Controllers\RenewalController::class, 'payPix'])->name('renewal.pix')->where('token', '[a-zA-Z0-9]{32,64}');
 Route::post('/renovar', [\App\Http\Controllers\RenewalController::class, 'process'])
     ->name('renewal.process')
     ->middleware(['checkout.reuse-pix', 'throttle:checkout-process', 'throttle:checkout-pix', 'throttle:checkout-card', 'checkout.abuse']);
@@ -434,7 +435,10 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::get('/produtos', [\App\Http\Controllers\ProdutosController::class, 'index'])->name('produtos.index');
         Route::get('/produtos/create', [\App\Http\Controllers\ProdutosController::class, 'create'])->name('produtos.create');
         Route::post('/produtos', [\App\Http\Controllers\ProdutosController::class, 'store'])->name('produtos.store');
+        Route::post('/produtos/import/preview', [\App\Http\Controllers\ProductPackageController::class, 'preview'])->name('produtos.import.preview');
+        Route::post('/produtos/import', [\App\Http\Controllers\ProductPackageController::class, 'import'])->name('produtos.import');
         Route::get('/produtos/{produto}/edit', [\App\Http\Controllers\ProdutosController::class, 'edit'])->name('produtos.edit');
+        Route::post('/produtos/{produto}/export', [\App\Http\Controllers\ProductPackageController::class, 'export'])->name('produtos.export');
         Route::get('/produtos/{produto}/checkout/edit', [\App\Http\Controllers\CheckoutConfigController::class, 'edit'])->name('checkout.builder');
         Route::post('/produtos/{produto}/checkout/ensure-slug', [\App\Http\Controllers\ProdutosController::class, 'ensureCheckoutSlug'])->name('produtos.checkout.ensure-slug');
         Route::delete('/produtos/{produto}/checkout/remove-slug', [\App\Http\Controllers\ProdutosController::class, 'removeCheckoutSlug'])->name('produtos.checkout.remove-slug');
@@ -536,9 +540,21 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
     Route::get('/vendas/assinaturas', [\App\Http\Controllers\AssinaturasController::class, 'index'])
         ->middleware('team.permission:vendas.view')
         ->name('assinaturas.index');
+    Route::get('/vendas/assinaturas/{subscription}', [\App\Http\Controllers\AssinaturasController::class, 'show'])
+        ->middleware('team.permission:vendas.view')
+        ->name('assinaturas.show');
     Route::post('/vendas/assinaturas/{subscription}/cancel', [\App\Http\Controllers\AssinaturasController::class, 'cancel'])
         ->middleware('team.permission:vendas.manage')
         ->name('assinaturas.cancel');
+    Route::post('/vendas/assinaturas/{subscription}/sync', [\App\Http\Controllers\AssinaturasController::class, 'sync'])
+        ->middleware('team.permission:vendas.manage')
+        ->name('assinaturas.sync');
+    Route::post('/vendas/assinaturas/{subscription}/charges/{chargeId}/refund', [\App\Http\Controllers\AssinaturasController::class, 'refundCharge'])
+        ->middleware('team.permission:reembolsos.manage')
+        ->name('assinaturas.charges.refund');
+    Route::post('/vendas/assinaturas/{subscription}/charges/{chargeId}/retry', [\App\Http\Controllers\AssinaturasController::class, 'retryCharge'])
+        ->middleware('team.permission:vendas.manage')
+        ->name('assinaturas.charges.retry');
     Route::get('/relatorios', [\App\Http\Controllers\RelatoriosController::class, 'index'])
         ->middleware('team.permission:relatorios.view')
         ->name('relatorios.index');
@@ -595,6 +611,7 @@ Route::middleware(['auth', 'admin.tenant', 'role:admin|infoprodutor|team', 'audi
         Route::get('/gerenciar-plugins/store-plugins-list', [\App\Http\Controllers\PluginsController::class, 'storePluginsList'])->name('plugins.store.list');
         Route::get('/gerenciar-plugins/store-plugin/{slug}', [\App\Http\Controllers\PluginStoreController::class, 'show'])->name('plugins.store.show')->where('slug', '[a-z0-9\-]+');
         Route::post('/gerenciar-plugins/install/{slug}', [\App\Http\Controllers\PluginInstallController::class, '__invoke'])->name('plugins.install')->where('slug', '[a-z0-9\-]+')->middleware('throttle:10,1');
+        Route::post('/gerenciar-plugins/update/{slug}', [\App\Http\Controllers\PluginInstallController::class, 'update'])->name('plugins.update')->where('slug', '[a-z0-9\-]+')->middleware('throttle:10,1');
         Route::post('/gerenciar-plugins/install-from-zip', [\App\Http\Controllers\PluginInstallController::class, 'installFromZip'])->name('plugins.install.from-zip')->middleware('throttle:10,1');
         Route::post('/gerenciar-plugins/register-plugin/{slug}', [\App\Http\Controllers\PluginsController::class, 'registerPlugin'])->name('plugins.register')->where('slug', '[a-z0-9\-_]+')->middleware('throttle:10,1');
     });

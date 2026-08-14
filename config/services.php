@@ -36,10 +36,15 @@ return [
     ],
 
     'plugin_store' => [
-        // URL fixa da loja (ver config/getfy.php plugin_store_url).
-        'url' => rtrim((string) config('getfy.plugin_store_url', 'https://store.getfy.cloud'), '/'),
+        // Marketplace público (link no painel).
+        'marketplace_url' => rtrim((string) config('getfy.plugin_store_url', 'https://getfy.org/plugins'), '/'),
+        // Base da API (sem /plugins).
+        'url' => rtrim((string) config('getfy.plugin_store_api_url', 'https://getfy.org'), '/'),
         'api_key' => env('PLUGIN_STORE_API_KEY'),
-        'submit_url' => env('PLUGIN_STORE_SUBMIT_URL'),
+        'submit_url' => env(
+            'PLUGIN_STORE_SUBMIT_URL',
+            rtrim((string) config('getfy.plugin_store_api_url', 'https://getfy.org'), '/').'/api/v1/plugins/submit'
+        ),
     ],
 
     /*

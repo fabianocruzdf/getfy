@@ -970,6 +970,7 @@ const bumpForm = useForm({
     title: '',
     description: '',
     price_override: '',
+    is_free: false,
     cta_title: 'Sim, quero esta oferta!',
 });
 const selectedBumpProduct = computed(() => {
@@ -998,6 +999,7 @@ function openNewOrderBump() {
     bumpForm.title = '';
     bumpForm.description = '';
     bumpForm.price_override = '';
+    bumpForm.is_free = false;
     bumpForm.cta_title = 'Sim, quero esta oferta!';
     showOrderBumpModal.value = true;
 }
@@ -1008,7 +1010,10 @@ function openEditOrderBump(bump) {
     bumpForm.target_subscription_plan_id = bump.target_subscription_plan_id != null ? String(bump.target_subscription_plan_id) : '';
     bumpForm.title = bump.title;
     bumpForm.description = bump.description ?? '';
-    bumpForm.price_override = bump.price_override != null ? String(bump.price_override) : '';
+    bumpForm.is_free = !!bump.is_free;
+    bumpForm.price_override = bump.is_free
+        ? '0'
+        : (bump.price_override != null ? String(bump.price_override) : '');
     bumpForm.cta_title = bump.cta_title;
     showOrderBumpModal.value = true;
 }
@@ -1018,13 +1023,15 @@ function closeOrderBumpModal() {
     bumpForm.reset();
 }
 function submitOrderBump() {
+    const isFree = !!bumpForm.is_free;
     const payload = {
         target_product_id: bumpForm.target_product_id,
         target_product_offer_id: bumpForm.target_product_offer_id || null,
         target_subscription_plan_id: bumpForm.target_subscription_plan_id || null,
         title: bumpForm.title,
         description: bumpForm.description || null,
-        price_override: bumpForm.price_override ? parseFloat(bumpForm.price_override) : null,
+        is_free: isFree,
+        price_override: isFree ? 0 : (bumpForm.price_override ? parseFloat(bumpForm.price_override) : null),
         cta_title: bumpForm.cta_title,
     };
     if (editingBump.value) {
@@ -3581,7 +3588,15 @@ function submit() {
                                     <p class="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">Produto: {{ bump.target_name }}</p>
                                     <p v-if="bump.description" class="mt-1 line-clamp-2 text-sm text-zinc-600 dark:text-zinc-300">{{ bump.description }}</p>
                                     <p class="mt-2 text-sm font-medium text-[var(--color-primary)]">
-                                        {{ bump.price_override != null ? `R$ ${Number(bump.price_override).toFixed(2)}` : `R$ ${Number(bump.effective_amount_brl).toFixed(2)}` }}
+                                        <span
+                                            v-if="bump.is_free"
+                                            class="mr-2 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+                                        >
+                                            Grátis
+                                        </span>
+                                        <template v-else>
+                                            {{ bump.price_override != null ? `R$ ${Number(bump.price_override).toFixed(2)}` : `R$ ${Number(bump.effective_amount_brl).toFixed(2)}` }}
+                                        </template>
                                         <span class="font-normal text-zinc-500 dark:text-zinc-400"> · CTA: {{ bump.cta_title }}</span>
                                     </p>
                                 </div>
@@ -3678,7 +3693,16 @@ function submit() {
                                     <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Descrição</label>
                                     <textarea v-model="bumpForm.description" rows="3" :class="inputClass" placeholder="Descreva o benefício da oferta" />
                                 </div>
-                                <div>
+                                <div class="rounded-xl border border-zinc-200 p-3 dark:border-zinc-700">
+                                    <Toggle
+                                        v-model="bumpForm.is_free"
+                                        label="Grátis (pré-selecionado no checkout)"
+                                    />
+                                    <p class="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                                        O cliente vê “Grátis” no checkout e o bump já vem marcado. O acesso ao produto é liberado junto com a compra principal.
+                                    </p>
+                                </div>
+                                <div v-if="!bumpForm.is_free">
                                     <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Preço com desconto (opcional)</label>
                                     <input v-model="bumpForm.price_override" type="number" step="0.01" min="0" :class="inputClass" placeholder="Deixe vazio para usar o preço do produto" />
                                     <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Se não preencher, será usado o preço do produto ou da oferta selecionada.</p>

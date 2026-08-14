@@ -212,6 +212,10 @@ class MemberBuilderController extends Controller
                         'show_title_on_cover' => $m->show_title_on_cover ?? true,
                         'release_after_days' => $m->release_after_days,
                         'release_at_date' => $m->release_at_date?->format('Y-m-d'),
+                        'release_progress_percent' => $m->release_progress_percent,
+                        'release_required_module_ids' => is_array($m->release_required_module_ids)
+                            ? array_values(array_map('intval', $m->release_required_module_ids))
+                            : [],
                         'access_duration_days' => $m->access_duration_days,
                         'lessons' => $m->lessons->map(fn (MemberLesson $l) => [
                             'id' => $l->id,
@@ -401,6 +405,14 @@ class MemberBuilderController extends Controller
         if (isset($incoming['sidebar']['items']) && is_array($incoming['sidebar']['items'])) {
             $config['sidebar'] = $config['sidebar'] ?? [];
             $config['sidebar']['items'] = array_values($incoming['sidebar']['items']);
+        }
+        // hero.slides: substituir por completo + normalizar legado
+        if (isset($incoming['hero']) && is_array($incoming['hero'])) {
+            $config['hero'] = array_replace_recursive($config['hero'] ?? [], $incoming['hero']);
+            if (array_key_exists('slides', $incoming['hero']) && is_array($incoming['hero']['slides'])) {
+                $config['hero']['slides'] = array_values($incoming['hero']['slides']);
+            }
+            $config['hero'] = Product::normalizeMemberAreaHero($config['hero']);
         }
         // gamification.achievements: substituir por completo
         if (isset($incoming['gamification']['achievements']) && is_array($incoming['gamification']['achievements'])) {
@@ -784,16 +796,12 @@ class MemberBuilderController extends Controller
                 'show_title_on_cover' => ['nullable', 'boolean'],
                 'release_after_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
                 'release_at_date' => ['nullable', 'date_format:Y-m-d'],
+                'release_progress_percent' => ['nullable', 'integer', 'min:1', 'max:100'],
+                'release_required_module_ids' => ['nullable', 'array'],
+                'release_required_module_ids.*' => ['integer', 'exists:member_modules,id'],
                 'access_duration_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
             ]);
-            if (! empty($validated['release_at_date'] ?? null)) {
-                $validated['release_after_days'] = null;
-            } elseif (empty($validated['release_after_days'] ?? null)) {
-                $validated['release_after_days'] = null;
-                $validated['release_at_date'] = null;
-            } else {
-                $validated['release_at_date'] = null;
-            }
+            $validated = $this->normalizeModuleReleaseFields($validated, (string) $produto->id, null);
             $max = MemberModule::where('member_section_id', $section->id)->max('position') ?? 0;
             $module = MemberModule::create([
                 'member_section_id' => $section->id,
@@ -803,6 +811,8 @@ class MemberBuilderController extends Controller
                 'show_title_on_cover' => $validated['show_title_on_cover'] ?? true,
                 'release_after_days' => $validated['release_after_days'] ?? null,
                 'release_at_date' => $validated['release_at_date'] ?? null,
+                'release_progress_percent' => $validated['release_progress_percent'] ?? null,
+                'release_required_module_ids' => $validated['release_required_module_ids'] ?? null,
                 'access_duration_days' => $validated['access_duration_days'] ?? null,
             ]);
         } elseif ($sectionType === 'products') {
@@ -933,6 +943,10 @@ class MemberBuilderController extends Controller
             'show_title_on_cover' => $module->show_title_on_cover ?? true,
             'release_after_days' => $module->release_after_days,
             'release_at_date' => $module->release_at_date?->format('Y-m-d'),
+            'release_progress_percent' => $module->release_progress_percent,
+            'release_required_module_ids' => is_array($module->release_required_module_ids)
+                ? array_values(array_map('intval', $module->release_required_module_ids))
+                : [],
             'access_duration_days' => $module->access_duration_days,
             'lessons' => $module->relationLoaded('lessons') ? $module->lessons->map(fn (MemberLesson $l) => [
                 'id' => $l->id,
@@ -984,21 +998,17 @@ class MemberBuilderController extends Controller
                 'show_title_on_cover' => ['sometimes', 'boolean'],
                 'release_after_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
                 'release_at_date' => ['nullable', 'date_format:Y-m-d'],
+                'release_progress_percent' => ['nullable', 'integer', 'min:1', 'max:100'],
+                'release_required_module_ids' => ['nullable', 'array'],
+                'release_required_module_ids.*' => ['integer', 'exists:member_modules,id'],
                 'access_duration_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
             ]);
-            if (array_key_exists('release_at_date', $validated) || array_key_exists('release_after_days', $validated)) {
-                $date = $validated['release_at_date'] ?? null;
-                $days = $validated['release_after_days'] ?? null;
-                if (! empty($date)) {
-                    $validated['release_at_date'] = $date;
-                    $validated['release_after_days'] = null;
-                } elseif (! empty($days)) {
-                    $validated['release_after_days'] = (int) $days;
-                    $validated['release_at_date'] = null;
-                } else {
-                    $validated['release_after_days'] = null;
-                    $validated['release_at_date'] = null;
-                }
+            if (array_key_exists('release_at_date', $validated)
+                || array_key_exists('release_after_days', $validated)
+                || array_key_exists('release_progress_percent', $validated)
+                || array_key_exists('release_required_module_ids', $validated)
+            ) {
+                $validated = $this->normalizeModuleReleaseFields($validated, (string) $produto->id, $module->id);
             }
         } elseif ($sectionType === 'products') {
             $validated = $request->validate([
@@ -1851,6 +1861,8 @@ class MemberBuilderController extends Controller
             'external_url' => $source->external_url,
             'release_after_days' => $source->release_after_days,
             'release_at_date' => $source->release_at_date,
+            'release_progress_percent' => $source->release_progress_percent,
+            'release_required_module_ids' => $source->release_required_module_ids,
             'access_duration_days' => $source->access_duration_days,
         ]);
 
@@ -1939,6 +1951,10 @@ class MemberBuilderController extends Controller
             'show_title_on_cover' => $module->show_title_on_cover ?? true,
             'release_after_days' => $module->release_after_days,
             'release_at_date' => $module->release_at_date?->format('Y-m-d'),
+            'release_progress_percent' => $module->release_progress_percent,
+            'release_required_module_ids' => is_array($module->release_required_module_ids)
+                ? array_values(array_map('intval', $module->release_required_module_ids))
+                : [],
             'access_duration_days' => $module->access_duration_days,
             'lessons' => $module->lessons->map(fn (MemberLesson $l) => $this->serializeMemberLessonForBuilder($l))->values()->all(),
         ];
@@ -1980,5 +1996,86 @@ class MemberBuilderController extends Controller
             'section_type' => $section->section_type ?? 'courses',
             'modules' => $section->modules->map(fn (MemberModule $m) => $this->serializeMemberModuleForBuilder($m))->values()->all(),
         ];
+    }
+
+    /**
+     * Normaliza campos de liberação de módulo (modos exclusivos).
+     *
+     * @param  array<string, mixed>  $validated
+     * @return array<string, mixed>
+     */
+    private function normalizeModuleReleaseFields(array $validated, string|int $productId, int|string|null $selfModuleId): array
+    {
+        $productId = (string) $productId;
+        $progress = $validated['release_progress_percent'] ?? null;
+        $required = $validated['release_required_module_ids'] ?? null;
+        $date = $validated['release_at_date'] ?? null;
+        $days = $validated['release_after_days'] ?? null;
+
+        if (is_array($required) && $required !== []) {
+            $ids = array_values(array_unique(array_filter(array_map(static function ($id) {
+                if (is_numeric($id)) {
+                    return (int) $id;
+                }
+
+                return null;
+            }, $required), static fn ($id) => $id !== null && $id > 0)));
+
+            if ($selfModuleId !== null && $selfModuleId !== '') {
+                $selfInt = (int) $selfModuleId;
+                $ids = array_values(array_filter($ids, static fn (int $id) => $id !== $selfInt));
+            }
+            if ($ids !== []) {
+                $validCount = MemberModule::query()
+                    ->where('product_id', $productId)
+                    ->whereIn('id', $ids)
+                    ->count();
+                if ($validCount !== count($ids)) {
+                    throw \Illuminate\Validation\ValidationException::withMessages([
+                        'release_required_module_ids' => ['Módulos pré-requisito inválidos para este produto.'],
+                    ]);
+                }
+            }
+            $validated['release_required_module_ids'] = $ids === [] ? null : $ids;
+            $validated['release_progress_percent'] = null;
+            $validated['release_after_days'] = null;
+            $validated['release_at_date'] = null;
+
+            return $validated;
+        }
+
+        if (! empty($progress) && (int) $progress > 0) {
+            $validated['release_progress_percent'] = max(1, min(100, (int) $progress));
+            $validated['release_required_module_ids'] = null;
+            $validated['release_after_days'] = null;
+            $validated['release_at_date'] = null;
+
+            return $validated;
+        }
+
+        if (! empty($date)) {
+            $validated['release_at_date'] = $date;
+            $validated['release_after_days'] = null;
+            $validated['release_progress_percent'] = null;
+            $validated['release_required_module_ids'] = null;
+
+            return $validated;
+        }
+
+        if (! empty($days)) {
+            $validated['release_after_days'] = (int) $days;
+            $validated['release_at_date'] = null;
+            $validated['release_progress_percent'] = null;
+            $validated['release_required_module_ids'] = null;
+
+            return $validated;
+        }
+
+        $validated['release_after_days'] = null;
+        $validated['release_at_date'] = null;
+        $validated['release_progress_percent'] = null;
+        $validated['release_required_module_ids'] = null;
+
+        return $validated;
     }
 }

@@ -14,7 +14,10 @@ import {
     Trash2,
     Package,
     ExternalLink,
+    Download,
+    Upload,
 } from 'lucide-vue-next';
+import ProductPackageModal from '@/components/produtos/ProductPackageModal.vue';
 
 defineOptions({ layout: LayoutInfoprodutor });
 
@@ -32,6 +35,22 @@ const produtosList = computed(() => props.produtos?.data ?? (Array.isArray(props
 const sidebarOpen = ref(false);
 const openMenuId = ref(null);
 const productToDelete = ref(null);
+const packageModalOpen = ref(false);
+const packageModalMode = ref('import');
+const packageProduct = ref(null);
+
+function openImportModal() {
+    packageModalMode.value = 'import';
+    packageProduct.value = null;
+    packageModalOpen.value = true;
+}
+
+function openExportModal(p) {
+    closeMenu();
+    packageModalMode.value = 'export';
+    packageProduct.value = p;
+    packageModalOpen.value = true;
+}
 
 function openSidebar() {
     sidebarOpen.value = true;
@@ -102,7 +121,11 @@ function pluginActions(productId) {
 <template>
     <div class="space-y-6">
         <ProdutosTabs />
-        <div class="flex justify-end">
+        <div class="flex justify-end gap-2">
+            <Button variant="outline" @click="openImportModal">
+                <Upload class="h-4 w-4" />
+                Importar produto
+            </Button>
             <Button @click="openSidebar">
                 Novo produto
             </Button>
@@ -193,6 +216,14 @@ function pluginActions(productId) {
                                 >
                                     <Copy class="h-4 w-4 shrink-0" />
                                     Duplicar
+                                </button>
+                                <button
+                                    type="button"
+                                    class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                                    @click="openExportModal(p)"
+                                >
+                                    <Download class="h-4 w-4 shrink-0" />
+                                    Exportar
                                 </button>
                                 <button
                                     type="button"
@@ -315,6 +346,13 @@ function pluginActions(productId) {
             </div>
         </div>
     </Teleport>
+
+    <ProductPackageModal
+        :open="packageModalOpen"
+        :mode="packageModalMode"
+        :product="packageProduct"
+        @update:open="packageModalOpen = $event"
+    />
 
     <ProdutoCreateSidebar
         :open="sidebarOpen"

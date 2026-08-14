@@ -258,7 +258,7 @@ class VendasController extends Controller
                 'orderItems.product:id,name',
                 'orderItems.productOffer:id,name',
                 'orderItems.subscriptionPlan:id,name',
-                'checkoutSession:id,order_id,utm_source,utm_medium,utm_campaign',
+                'checkoutSession:id,order_id,utm_source,utm_medium,utm_campaign,tracking_metadata',
                 'commissionEntries:id,order_id,role,commission_amount',
             ])
             ->orderByDesc('created_at')
@@ -273,7 +273,7 @@ class VendasController extends Controller
                 $arr['currency'] = $o->getCurrencyOrDefault();
                 $arr['gateway_label'] = $o->paymentMethodDisplayLabel();
                 $arr['product_display_name'] = $this->productDisplayName($o);
-                $arr['checkout_url'] = url('/c/'.$o->getCheckoutSlug());
+                $arr['checkout_url'] = $this->checkoutUrlWithTracking($o);
                 $arr['payment_type_label'] = $this->paymentTypeLabel($o);
                 $arr['amount_total'] = $o->lineItemsTotalAmount();
                 $producerAmount = $producerSaleAmount->forOrder($o);
@@ -505,6 +505,72 @@ class VendasController extends Controller
         ];
 
         return $map[$status ?? ''] ?? ($status ?? '–');
+    }
+
+    /**
+     * URL do checkout da venda, com UTMs da sessão/metadata quando existirem.
+     */
+    private function checkoutUrlWithTracking(Order $order): string
+    {
+        $slug = trim($order->getCheckoutSlug());
+        if ($slug === '') {
+            return '';
+        }
+
+        $url = url('/c/'.$slug);
+        $params = $this->trackingQueryParamsForOrder($order);
+        if ($params === []) {
+            return $url;
+        }
+
+        return $url.(str_contains($url, '?') ? '&' : '?').http_build_query($params);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function trackingQueryParamsForOrder(Order $order): array
+    {
+        $order->loadMissing('checkoutSession');
+        $session = $order->checkoutSession;
+        $meta = is_array($order->metadata) ? $order->metadata : [];
+        $sessionTracking = is_array($session?->tracking_metadata) ? $session->tracking_metadata : [];
+
+        $keys = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'];
+        $params = [];
+
+        foreach ($keys as $key) {
+            $value = null;
+            if (in_array($key, ['utm_source', 'utm_medium', 'utm_campaign'], true)) {
+                $fromSession = trim((string) ($session?->{$key} ?? ''));
+                if ($fromSession !== '') {
+                    $value = $fromSession;
+                }
+            }
+            if ($value === null) {
+                $fromMeta = $meta[$key] ?? null;
+                if (is_string($fromMeta) || is_numeric($fromMeta)) {
+                    $trimmed = trim((string) $fromMeta);
+                    if ($trimmed !== '') {
+                        $value = $trimmed;
+                    }
+                }
+            }
+            if ($value === null) {
+                $fromTracking = $sessionTracking[$key] ?? null;
+                if (is_string($fromTracking) || is_numeric($fromTracking)) {
+                    $trimmed = trim((string) $fromTracking);
+                    if ($trimmed !== '') {
+                        $value = $trimmed;
+                    }
+                }
+            }
+            if ($value !== null) {
+                $params[$key] = mb_substr($value, 0, 512);
+            }
+        }
+
+        return $params;
     }
 
     public function resendAccessEmail(Order $order, AccessEmailService $accessEmailService): JsonResponse

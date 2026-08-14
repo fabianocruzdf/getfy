@@ -108,6 +108,38 @@ class SubscriptionLifecycleTest extends TestCase
         Event::assertDispatched(SubscriptionPastDue::class);
     }
 
+    public function test_effective_status_is_past_due_even_before_db_processed(): void
+    {
+        $product = $this->createSubscriptionProduct([
+            'grace_period_days' => 0,
+            'renewal_window_days' => 7,
+        ]);
+        $user = User::factory()->create(['tenant_id' => 1, 'role' => User::ROLE_ALUNO]);
+        $sub = $this->createSubscriptionForProduct($product, $user, Carbon::today()->subDays(2)->toDateString());
+
+        $lifecycle = app(SubscriptionLifecycleService::class);
+        $this->assertSame(Subscription::STATUS_PAST_DUE, $lifecycle->effectiveStatus($sub, Carbon::today()));
+        $this->assertTrue($lifecycle->shouldAutoBill($sub, Carbon::today(), false, Subscription::STATUS_PAST_DUE));
+    }
+
+    public function test_process_stale_for_tenant_marks_past_due(): void
+    {
+        Event::fake([SubscriptionPastDue::class]);
+
+        $product = $this->createSubscriptionProduct([
+            'grace_period_days' => 0,
+            'renewal_window_days' => 7,
+        ]);
+        $user = User::factory()->create(['tenant_id' => 1, 'role' => User::ROLE_ALUNO]);
+        $sub = $this->createSubscriptionForProduct($product, $user, Carbon::today()->subDays(1)->toDateString());
+
+        app(SubscriptionLifecycleService::class)->processStaleForTenant(1, Carbon::today());
+
+        $sub->refresh();
+        $this->assertSame(Subscription::STATUS_PAST_DUE, $sub->status);
+        Event::assertDispatched(SubscriptionPastDue::class);
+    }
+
     public function test_cancel_subscription_dispatches_event(): void
     {
         Event::fake([SubscriptionCancelled::class]);

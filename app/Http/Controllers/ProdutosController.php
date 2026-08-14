@@ -241,6 +241,7 @@ class ProdutosController extends Controller
                 'title' => $b->title,
                 'description' => $b->description,
                 'price_override' => $b->price_override !== null ? (float) $b->price_override : null,
+                'is_free' => (bool) $b->is_free,
                 'cta_title' => $b->cta_title,
                 'position' => $b->position,
                 'effective_amount_brl' => $b->getEffectiveAmountBrl(),
@@ -1220,6 +1221,7 @@ class ProdutosController extends Controller
             'title' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string', 'max:65535'],
             'price_override' => ['nullable', 'numeric', 'min:0'],
+            'is_free' => ['nullable', 'boolean'],
             'cta_title' => ['required', 'string', 'max:255'],
         ]);
         $target = Product::forTenant($tenantId)->find($validated['target_product_id']);
@@ -1232,7 +1234,10 @@ class ProdutosController extends Controller
         $validated['product_id'] = $produto->id;
         $validated['target_product_offer_id'] = $validated['target_product_offer_id'] ?? null;
         $validated['target_subscription_plan_id'] = $validated['target_subscription_plan_id'] ?? null;
-        $validated['price_override'] = isset($validated['price_override']) ? (float) $validated['price_override'] : null;
+        $validated['is_free'] = (bool) ($validated['is_free'] ?? false);
+        $validated['price_override'] = $validated['is_free']
+            ? 0.0
+            : (isset($validated['price_override']) ? (float) $validated['price_override'] : null);
         $maxPosition = $produto->orderBumps()->max('position') ?? 0;
         $validated['position'] = $maxPosition + 1;
         ProductOrderBump::create($validated);
@@ -1253,6 +1258,7 @@ class ProdutosController extends Controller
             'title' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string', 'max:65535'],
             'price_override' => ['nullable', 'numeric', 'min:0'],
+            'is_free' => ['nullable', 'boolean'],
             'cta_title' => ['required', 'string', 'max:255'],
         ]);
         $target = Product::forTenant($tenantId)->find($validated['target_product_id']);
@@ -1264,7 +1270,10 @@ class ProdutosController extends Controller
         }
         $validated['target_product_offer_id'] = $validated['target_product_offer_id'] ?? null;
         $validated['target_subscription_plan_id'] = $validated['target_subscription_plan_id'] ?? null;
-        $validated['price_override'] = isset($validated['price_override']) ? (float) $validated['price_override'] : null;
+        $validated['is_free'] = (bool) ($validated['is_free'] ?? false);
+        $validated['price_override'] = $validated['is_free']
+            ? 0.0
+            : (isset($validated['price_override']) ? (float) $validated['price_override'] : null);
         $bump->update($validated);
         return back()->with('success', 'Order bump atualizado.');
     }

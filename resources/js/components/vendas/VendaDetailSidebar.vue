@@ -265,10 +265,10 @@ function itemLabel(item) {
                                     :href="venda.checkout_url"
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    class="inline-flex items-center gap-1 text-sm text-[var(--color-primary)] hover:underline"
+                                    class="inline-flex items-start gap-1 break-all text-sm text-[var(--color-primary)] hover:underline"
                                 >
                                     {{ venda.checkout_url }}
-                                    <ExternalLink class="h-3.5 w-3.5 shrink-0" />
+                                    <ExternalLink class="mt-0.5 h-3.5 w-3.5 shrink-0" />
                                 </a>
                                 <p v-else class="text-sm text-zinc-500">–</p>
                             </div>

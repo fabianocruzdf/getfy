@@ -20,6 +20,14 @@ const selectedIds = ref([...props.selectedIds]);
 
 const selectedSet = computed(() => new Set(selectedIds.value));
 
+function freeLabel() {
+    const label = props.t('checkout.gratis');
+    if (!label || label === 'checkout.gratis') {
+        return 'Grátis';
+    }
+    return label;
+}
+
 function toggle(bump) {
     const id = bump.id;
     if (selectedSet.value.has(id)) {
@@ -171,7 +179,20 @@ defineExpose({
                             <span class="min-w-0 break-words text-xs font-medium sm:whitespace-nowrap">{{ bump.cta_title }}</span>
                         </span>
                         <div class="shrink-0 flex flex-col items-end">
-                            <template v-if="bump.original_amount_brl != null && bump.original_amount_brl > bump.amount_brl">
+                            <template v-if="bump.is_free || Number(bump.amount_brl) <= 0">
+                                <span
+                                    v-if="bump.original_amount_brl != null && Number(bump.original_amount_brl) > 0"
+                                    class="text-sm font-normal text-gray-400 line-through"
+                                >
+                                    +{{ formatPrice(bump.original_amount_brl, displayCurrency) }}
+                                </span>
+                                <span
+                                    class="mt-0.5 inline-flex items-center rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide text-emerald-700 ring-1 ring-inset ring-emerald-600/20"
+                                >
+                                    {{ freeLabel() }}
+                                </span>
+                            </template>
+                            <template v-else-if="bump.original_amount_brl != null && bump.original_amount_brl > bump.amount_brl">
                                 <span class="text-sm font-normal text-gray-400 line-through">
                                     +{{ formatPrice(bump.original_amount_brl, displayCurrency) }}
                                 </span>

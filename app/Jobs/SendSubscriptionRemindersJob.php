@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Mail\SubscriptionReminderMail;
 use App\Models\Subscription;
+use App\Services\SubscriptionAutoBillingService;
 use App\Services\SubscriptionLifecycleService;
 use App\Services\TenantMailConfigService;
 use Carbon\Carbon;
@@ -25,6 +26,7 @@ class SendSubscriptionRemindersJob implements ShouldQueue
     ): void {
         $today = Carbon::today();
 
+        // Status past_due + webhook + auto-PIX (e-mail da cobrança automática ocorre no ensure).
         $lifecycle->processDaily($today);
 
         Subscription::query()
@@ -33,6 +35,7 @@ class SendSubscriptionRemindersJob implements ShouldQueue
             ->whereNotNull('current_period_end')
             ->chunkById(100, function ($subscriptions) use ($mailConfig, $lifecycle, $today) {
                 foreach ($subscriptions as $subscription) {
+                    $subscription->refresh();
                     if (! $lifecycle->shouldSendReminderToday($subscription, $today)) {
                         continue;
                     }
@@ -42,7 +45,30 @@ class SendSubscriptionRemindersJob implements ShouldQueue
                         continue;
                     }
 
-                    $email = $lifecycle->buildReminderEmail($subscription, $today);
+                    $pix = null;
+                    $order = null;
+                    if ($lifecycle->shouldAutoBill($subscription, $today)) {
+                        try {
+                            $result = app(SubscriptionAutoBillingService::class)
+                                ->ensureRenewalPayment($subscription, sendEmail: false);
+                            if (is_array($result)) {
+                                $order = $result['order'] ?? null;
+                                if (! empty($result['copy_paste']) || ! empty($result['qrcode'])) {
+                                    $pix = [
+                                        'copy_paste' => $result['copy_paste'] ?? null,
+                                        'qrcode' => $result['qrcode'] ?? null,
+                                    ];
+                                }
+                            }
+                        } catch (\Throwable $e) {
+                            Log::warning('SendSubscriptionRemindersJob: auto billing falhou.', [
+                                'subscription_id' => $subscription->id,
+                                'message' => $e->getMessage(),
+                            ]);
+                        }
+                    }
+
+                    $email = $lifecycle->buildReminderEmail($subscription, $today, $pix, $order);
 
                     try {
                         $mailConfig->applyMailerConfigForTenant($subscription->tenant_id, [], null);

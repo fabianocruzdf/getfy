@@ -40,7 +40,8 @@ class PluginsController extends Controller
 
         $store = app(PluginStoreService::class);
         $pluginStore = [
-            'store_url' => rtrim((string) config('getfy.plugin_store_url', 'https://store.getfy.cloud'), '/'),
+            'store_url' => rtrim((string) config('getfy.plugin_store_url', 'https://getfy.org/plugins'), '/'),
+            'api_url' => rtrim((string) config('getfy.plugin_store_api_url', 'https://getfy.org'), '/'),
             'submit_url' => $store->getSubmitPluginUrl(),
         ];
         $bundled = PluginRegistry::bundledPluginsPath();

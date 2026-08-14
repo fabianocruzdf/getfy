@@ -100,6 +100,138 @@ class MemberProgressService
     }
 
     /**
+     * Aulas do módulo de conteúdo (resolve wrapper embutido → source).
+     *
+     * @return \Illuminate\Support\Collection<int, MemberLesson>
+     */
+    public function contentLessonsForModule(MemberModule $module)
+    {
+        $content = $module;
+        if ($module->source_member_module_id) {
+            $source = $module->relationLoaded('sourceModule')
+                ? $module->sourceModule
+                : MemberModule::query()->with('lessons')->find($module->source_member_module_id);
+            if ($source) {
+                $content = $source;
+            }
+        }
+
+        if ($content->relationLoaded('lessons')) {
+            return $content->lessons;
+        }
+
+        return $content->lessons()->orderBy('position')->get();
+    }
+
+    /**
+     * @param  array<int|string, true>|null  $completedIdSet
+     */
+    public function isModuleCompleted(MemberModule $module, User $user, ?array $completedIdSet = null): bool
+    {
+        $lessons = $this->contentLessonsForModule($module);
+        if ($lessons->isEmpty()) {
+            return true;
+        }
+
+        if ($completedIdSet === null) {
+            $lessonIds = $lessons->pluck('id')->all();
+            $done = MemberLessonProgress::query()
+                ->forUser($user->id)
+                ->whereNotNull('completed_at')
+                ->whereIn('member_lesson_id', $lessonIds)
+                ->pluck('member_lesson_id')
+                ->all();
+            $completedIdSet = [];
+            foreach ($done as $id) {
+                $completedIdSet[$id] = true;
+            }
+        }
+
+        foreach ($lessons as $lesson) {
+            if (! isset($completedIdSet[$lesson->id])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  array<int|string, true>|null  $completedIdSet
+     */
+    public function moduleCompletionPercent(MemberModule $module, User $user, ?array $completedIdSet = null): int
+    {
+        $lessons = $this->contentLessonsForModule($module);
+        $total = $lessons->count();
+        if ($total === 0) {
+            return 100;
+        }
+
+        if ($completedIdSet === null) {
+            $lessonIds = $lessons->pluck('id')->all();
+            $doneCount = MemberLessonProgress::query()
+                ->forUser($user->id)
+                ->whereNotNull('completed_at')
+                ->whereIn('member_lesson_id', $lessonIds)
+                ->count();
+
+            return (int) min(100, round(($doneCount / $total) * 100));
+        }
+
+        $done = 0;
+        foreach ($lessons as $lesson) {
+            if (isset($completedIdSet[$lesson->id])) {
+                $done++;
+            }
+        }
+
+        return (int) min(100, round(($done / $total) * 100));
+    }
+
+    /**
+     * Títulos dos módulos obrigatórios ainda incompletos (mesma área / product_id do host).
+     *
+     * @param  list<int|string>  $requiredModuleIds
+     * @param  array<int|string, true>|null  $completedIdSet
+     * @return list<string>
+     */
+    public function incompleteRequiredModuleTitles(
+        array $requiredModuleIds,
+        Product $hostProduct,
+        User $user,
+        ?array $completedIdSet = null
+    ): array {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $requiredModuleIds))));
+        if ($ids === []) {
+            return [];
+        }
+
+        $modules = MemberModule::query()
+            ->where('product_id', $hostProduct->id)
+            ->whereIn('id', $ids)
+            ->with(['lessons', 'sourceModule.lessons'])
+            ->get()
+            ->keyBy('id');
+
+        if ($completedIdSet === null) {
+            $completedIdSet = $this->completedLessonIdSet($hostProduct, $user);
+        }
+
+        $missing = [];
+        foreach ($ids as $id) {
+            $mod = $modules->get($id);
+            if (! $mod) {
+                continue;
+            }
+            if (! $this->isModuleCompleted($mod, $user, $completedIdSet)) {
+                $missing[] = (string) $mod->title;
+            }
+        }
+
+        return $missing;
+    }
+
+    /**
      * Most recent in-progress lesson for "continue watching" (member area host product).
      *
      * @return array{lesson_id: int|string, module_id: int|string|null, lesson_title: string, module_title: string|null}|null

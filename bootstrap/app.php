@@ -21,7 +21,20 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->trustProxies(at: '*', headers: Request::HEADER_X_FORWARDED_FOR | Request::HEADER_X_FORWARDED_HOST | Request::HEADER_X_FORWARDED_PORT | Request::HEADER_X_FORWARDED_PROTO | Request::HEADER_X_FORWARDED_PREFIX | Request::HEADER_X_FORWARDED_AWS_ELB);
+        $middleware->trustProxies(
+            at: (static function (): array|string {
+                $proxies = env('TRUSTED_PROXIES', '');
+                if ($proxies === null || $proxies === '') {
+                    return [];
+                }
+                if ($proxies === '*') {
+                    return '*';
+                }
+
+                return array_values(array_filter(array_map('trim', explode(',', (string) $proxies)), static fn ($v) => $v !== ''));
+            })(),
+            headers: Request::HEADER_X_FORWARDED_FOR | Request::HEADER_X_FORWARDED_HOST | Request::HEADER_X_FORWARDED_PORT | Request::HEADER_X_FORWARDED_PROTO | Request::HEADER_X_FORWARDED_PREFIX | Request::HEADER_X_FORWARDED_AWS_ELB
+        );
 
         // Redirect de convidados para /login (evita RouteNotFoundException quando route('login') não está disponível, ex.: cache de rotas)
         $middleware->redirectGuestsTo(fn () => url('/login'));
@@ -149,7 +162,10 @@ return Application::configure(basePath: dirname(__DIR__))
         });
     })
     ->withSchedule(function (Schedule $schedule): void {
-        $schedule->job(new \App\Jobs\SendSubscriptionRemindersJob)->dailyAt('09:00');
+        // Lifecycle síncrono (não depende de queue worker) — past_due, webhook, auto-PIX.
+        $schedule->command('subscriptions:process-lifecycle')->hourly();
+        // Lembretes + PIX no e-mail; command síncrono (job também existe se enfileirado).
+        $schedule->command('subscriptions:send-reminders')->dailyAt('09:00');
         $schedule->command('checkout:fire-abandoned-cart-webhooks')->everyTenMinutes();
         $schedule->command('checkout:send-cart-recovery-emails')->everyMinute();
         $schedule->command('checkout:send-cart-recovery-sms')->everyMinute();
