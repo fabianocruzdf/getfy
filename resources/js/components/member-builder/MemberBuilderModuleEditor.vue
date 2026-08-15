@@ -1,8 +1,8 @@
 <script setup>
-import { computed } from 'vue';
 import Button from '@/components/ui/Button.vue';
 import Toggle from '@/components/ui/Toggle.vue';
 import { ShoppingBag, ExternalLink } from 'lucide-vue-next';
+import { computed } from 'vue';
 
 const props = defineProps({
     section: { type: Object, required: true },
@@ -10,6 +10,7 @@ const props = defineProps({
     inputClass: { type: String, required: true },
     uploadLimits: { type: Object, required: true },
     tenantProducts: { type: Array, default: () => [] },
+    productModules: { type: Array, default: () => [] },
     editingTitle: { type: String, default: '' },
     editingShowTitleOnCover: { type: Boolean, default: true },
     editingRelatedProductId: { default: null },
@@ -18,6 +19,8 @@ const props = defineProps({
     editingReleaseMode: { type: String, default: 'none' },
     editingReleaseAfterDays: { type: String, default: '' },
     editingReleaseAtDate: { type: String, default: '' },
+    editingReleaseProgressPercent: { type: String, default: '' },
+    editingReleaseRequiredModuleIds: { type: Array, default: () => [] },
     editingAccessDurationDays: { type: String, default: '' },
     editingRequiresPreviousModules: { type: Boolean, default: false },
     editingReleaseDependencies: { type: Array, default: () => [] },
@@ -36,6 +39,8 @@ const emit = defineEmits([
     'update:editingReleaseMode',
     'update:editingReleaseAfterDays',
     'update:editingReleaseAtDate',
+    'update:editingReleaseProgressPercent',
+    'update:editingReleaseRequiredModuleIds',
     'update:editingAccessDurationDays',
     'update:editingRequiresPreviousModules',
     'update:editingReleaseDependencies',
@@ -71,6 +76,22 @@ function updateDependencyProgress(moduleId, value) {
 
 function dependencyTitle(moduleId) {
     return props.editingReleaseDependencyOptions.find((candidate) => Number(candidate.id) === Number(moduleId))?.title ?? 'Módulo';
+}
+
+const prerequisiteOptions = computed(() => {
+    const selfId = props.module?.id;
+    return (props.productModules || []).filter((m) => m.id !== selfId);
+});
+
+function isRequiredSelected(id) {
+    return (props.editingReleaseRequiredModuleIds || []).map(Number).includes(Number(id));
+}
+
+function toggleRequiredModule(id) {
+    const n = Number(id);
+    const current = (props.editingReleaseRequiredModuleIds || []).map(Number);
+    const next = current.includes(n) ? current.filter((x) => x !== n) : [...current, n];
+    emit('update:editingReleaseRequiredModuleIds', next);
 }
 </script>
 
@@ -147,6 +168,8 @@ function dependencyTitle(moduleId) {
                         <option value="none">Imediata</option>
                         <option value="days">Após X dias</option>
                         <option value="date">Na data</option>
+                        <option value="progress">Ao atingir X% do curso</option>
+                        <option value="modules">Ao concluir módulos</option>
                     </select>
                     <input
                         v-if="editingReleaseMode === 'days'"
@@ -165,6 +188,48 @@ function dependencyTitle(moduleId) {
                         class="w-full"
                         @input="emit('update:editingReleaseAtDate', $event.target.value)"
                     />
+                    <div v-else-if="editingReleaseMode === 'progress'" class="space-y-1">
+                        <input
+                            :value="editingReleaseProgressPercent"
+                            type="number"
+                            min="1"
+                            max="100"
+                            :class="inputClass"
+                            class="w-full"
+                            placeholder="Ex.: 40"
+                            @input="emit('update:editingReleaseProgressPercent', $event.target.value)"
+                        />
+                        <p class="text-[10px] text-zinc-500 dark:text-zinc-400">
+                            Percentual de aulas concluídas no curso (1–100).
+                        </p>
+                    </div>
+                    <div v-else-if="editingReleaseMode === 'modules'" class="space-y-1">
+                        <p class="text-[10px] text-zinc-500 dark:text-zinc-400">
+                            O aluno precisa concluir 100% das aulas de todos os módulos marcados.
+                        </p>
+                        <div
+                            v-if="prerequisiteOptions.length"
+                            class="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-zinc-200 p-2 dark:border-zinc-600"
+                        >
+                            <label
+                                v-for="opt in prerequisiteOptions"
+                                :key="opt.id"
+                                class="flex cursor-pointer items-start gap-2 rounded px-1 py-0.5 text-xs text-zinc-700 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800/50"
+                            >
+                                <input
+                                    type="checkbox"
+                                    class="mt-0.5"
+                                    :checked="isRequiredSelected(opt.id)"
+                                    @change="toggleRequiredModule(opt.id)"
+                                />
+                                <span>
+                                    <span class="font-medium">{{ opt.title }}</span>
+                                    <span v-if="opt.section_title" class="block text-[10px] text-zinc-500">{{ opt.section_title }}</span>
+                                </span>
+                            </label>
+                        </div>
+                        <p v-else class="text-[10px] text-zinc-500">Nenhum outro módulo neste produto.</p>
+                    </div>
                 </div>
             </div>
             <div>

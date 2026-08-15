@@ -106,4 +106,21 @@ class FakeConsumerData
             'phone' => self::$phones[$seed % $p],
         ];
     }
+
+    /**
+     * Endereço BR genérico quando o checkout não coleta endereço (ex.: PIX Automático CajuPay).
+     *
+     * @return array{zipcode: string, street: string, number: string, neighborhood: string, city: string, state: string}
+     */
+    public static function defaultBrazilAddress(): array
+    {
+        return [
+            'zipcode' => '01310100',
+            'street' => 'Av Paulista',
+            'number' => '1000',
+            'neighborhood' => 'Bela Vista',
+            'city' => 'São Paulo',
+            'state' => 'SP',
+        ];
+    }
 }

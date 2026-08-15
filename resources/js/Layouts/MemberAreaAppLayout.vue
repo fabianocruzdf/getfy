@@ -538,7 +538,7 @@ watch(cinemaMode, (active) => {
         <link v-if="faviconHref" rel="icon" :href="faviconHref" />
     </Head>
     <div
-        class="min-h-screen overflow-x-hidden transition-colors"
+        class="min-h-screen overflow-x-clip transition-colors"
         :style="{
             '--ma-primary': theme.primary || '#0ea5e9',
             '--ma-bg': theme.background || '#18181b',
@@ -941,7 +941,7 @@ watch(cinemaMode, (active) => {
             :class="cinemaMode ? 'pt-0' : 'pt-14'"
             :style="{ backgroundColor: 'var(--ma-bg)', color: 'var(--ma-text)' }"
         >
-            <main class="overflow-x-hidden print:p-0" :class="cinemaMode ? 'px-2 pb-4 pt-1 sm:px-3' : 'px-4 pb-6 sm:px-6'">
+            <main class="overflow-x-clip print:p-0" :class="cinemaMode ? 'px-2 pb-4 pt-1 sm:px-3' : 'px-4 pb-6 sm:px-6'">
                 <slot />
             </main>
         </div>

@@ -90,12 +90,17 @@ const manualInstallProcessing = ref(false);
 const downloadFallbackLoading = ref(false);
 const downloadFallbackError = ref('');
 
-/** URL fixa da loja — não vem do .env. */
-const PLUGIN_STORE_URL = 'https://store.getfy.cloud';
+/** Marketplace oficial (página pública). API fica em api_url. */
+const PLUGIN_STORE_URL = computed(() =>
+    (props.pluginStore?.store_url || 'https://getfy.org/plugins').replace(/\/$/, '')
+);
+const PLUGIN_STORE_API_URL = computed(() =>
+    (props.pluginStore?.api_url || 'https://getfy.org').replace(/\/$/, '')
+);
 
 function goToPluginStore() {
     if (typeof window !== 'undefined') {
-        window.open(PLUGIN_STORE_URL, '_blank', 'noopener,noreferrer');
+        window.open(PLUGIN_STORE_URL.value, '_blank', 'noopener,noreferrer');
     }
 }
 
@@ -118,12 +123,12 @@ watch(
 );
 
 async function loadStorePlugins() {
-    const baseUrl = PLUGIN_STORE_URL;
+    const baseUrl = PLUGIN_STORE_API_URL.value;
     storePluginsError.value = null;
     storePluginsLoading.value = true;
     try {
-        // Busca direto na API da loja (navegador → plugins-getfy) para evitar requisição servidor→servidor que caía no vhost errado
-        const apiUrl = baseUrl.replace(/\/$/, '') + '/api/v1/plugins';
+        // Busca direto na API da loja (navegador → getfy.org) para evitar requisição servidor→servidor que caía no vhost errado
+        const apiUrl = baseUrl + '/api/v1/plugins';
         const r = await fetch(apiUrl);
         const json = await r.json();
         storePluginsList.value = Array.isArray(json?.data) ? json.data : [];
@@ -143,9 +148,9 @@ function categoryLabel(category) {
 
 async function openStoreDetail(plugin) {
     storeDetail.value = { ...plugin };
-    const baseUrl = PLUGIN_STORE_URL;
+    const baseUrl = PLUGIN_STORE_API_URL.value;
     try {
-        const apiUrl = baseUrl.replace(/\/$/, '') + '/api/v1/plugins/' + encodeURIComponent(plugin.slug);
+        const apiUrl = baseUrl + '/api/v1/plugins/' + encodeURIComponent(plugin.slug);
         const r = await fetch(apiUrl);
         if (r.ok) {
             const json = await r.json();
@@ -170,18 +175,18 @@ const returnUrl = computed(() => {
 });
 
 function checkoutUrl(slug) {
-    const base = PLUGIN_STORE_URL.replace(/\/$/, '');
+    const base = PLUGIN_STORE_API_URL.value;
     const targetCheckout = '/c/' + slug + '?return_url=' + encodeURIComponent(returnUrl.value + slug);
     return `${base}/login?next=${encodeURIComponent(targetCheckout)}`;
 }
 
 async function installStorePlugin(slug, purchaseToken = null) {
-    const baseUrl = PLUGIN_STORE_URL;
+    const baseUrl = PLUGIN_STORE_API_URL.value;
     installingSlug.value = slug;
     storePluginsError.value = null;
     try {
         // 1) Obter link de download no navegador (evita requisição servidor→loja)
-        const apiUrl = baseUrl.replace(/\/$/, '') + '/api/v1/plugins/' + encodeURIComponent(slug) + '/request-download';
+        const apiUrl = baseUrl + '/api/v1/plugins/' + encodeURIComponent(slug) + '/request-download';
         const body = purchaseToken ? { purchase_token: purchaseToken } : {};
         const r = await fetch(apiUrl, {
             method: 'POST',
@@ -284,7 +289,7 @@ function closeZipUnavailableModal() {
 
 async function downloadPluginFallback() {
     const slug = lastInstallSlug.value;
-    const baseUrl = PLUGIN_STORE_URL;
+    const baseUrl = PLUGIN_STORE_API_URL.value;
     if (!slug) {
         if (lastInstallDownloadUrl.value) window.open(lastInstallDownloadUrl.value, '_blank');
         closeZipUnavailableModal();
@@ -293,7 +298,7 @@ async function downloadPluginFallback() {
     downloadFallbackError.value = '';
     downloadFallbackLoading.value = true;
     try {
-        const apiUrl = baseUrl.replace(/\/$/, '') + '/api/v1/plugins/' + encodeURIComponent(slug) + '/request-download';
+        const apiUrl = baseUrl + '/api/v1/plugins/' + encodeURIComponent(slug) + '/request-download';
         const body = urlPurchaseToken.value ? { purchase_token: urlPurchaseToken.value } : {};
         const r = await fetch(apiUrl, {
             method: 'POST',

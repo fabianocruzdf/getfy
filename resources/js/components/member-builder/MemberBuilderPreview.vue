@@ -5,6 +5,7 @@ import { getCommunityPageIconComponent } from '@/utils/communityPageIcons';
 import { COMMUNITY_BANNER_ASPECT_CLASS, COMMUNITY_BANNER_CONTAINER_CLASS, COMMUNITY_BANNER_IMAGE_CLASS } from '@/utils/communityBanner';
 import MemberAreaSplitLoginLayout from '@/components/member-area/MemberAreaSplitLoginLayout.vue';
 import MemberAreaLoginForm from '@/components/member-area/MemberAreaLoginForm.vue';
+import MemberAreaHero from '@/components/member-area/MemberAreaHero.vue';
 
 const props = defineProps({
     mode: { type: String, default: 'area' },
@@ -24,13 +25,6 @@ const props = defineProps({
 
 const theme = computed(() => props.config?.theme ?? {});
 const hero = computed(() => props.config?.hero ?? {});
-const heroDesktopBg = computed(() => hero.value?.image_url_desktop || hero.value?.image_url || null);
-const heroMobileBg = computed(() => hero.value?.image_url_mobile || hero.value?.image_url_desktop || hero.value?.image_url || null);
-const heroGradient = 'linear-gradient(135deg, var(--ma-primary) 0%, #27272a 100%)';
-const heroOverlayOpacity = computed(() => {
-    const raw = hero.value?.overlay_opacity ?? 50;
-    return (raw <= 1 ? raw * 100 : raw) / 100;
-});
 const headerLogo = computed(() => props.config?.header?.logo_url ?? null);
 const sidebar = computed(() => props.config?.sidebar ?? {});
 const login = computed(() => props.config?.login ?? {});
@@ -90,40 +84,13 @@ const certOverlayOpacity = computed(() => {
             <div class="flex h-full min-h-[500px] w-full flex-col overflow-auto">
                 <!-- Hero + header em overlay -->
                 <div class="relative shrink-0">
-                    <section
-                        class="relative -mx-6 flex min-h-[55vh] items-end justify-start overflow-hidden bg-cover bg-center px-8 pb-10 pt-24 md:min-h-[65vh] md:px-10 md:pb-14 md:pt-28"
-                        :style="{ backgroundImage: heroGradient }"
-                    >
-                        <div
-                            v-if="heroDesktopBg"
-                            class="absolute inset-0 hidden bg-cover bg-center md:block"
-                            :style="{ backgroundImage: `url(${heroDesktopBg})` }"
-                        />
-                        <div
-                            v-if="heroMobileBg"
-                            class="absolute inset-0 bg-cover bg-center md:hidden"
-                            :style="{ backgroundImage: `url(${heroMobileBg})` }"
-                        />
-                        <div
-                            class="pointer-events-none absolute inset-0 bg-black"
-                            :style="{ opacity: heroOverlayOpacity }"
-                        />
-                        <div
-                            class="pointer-events-none absolute inset-x-0 bottom-0 h-1/2"
-                            :style="{ background: `linear-gradient(to top, var(--ma-bg) 0%, transparent 100%)` }"
-                        />
-                        <div class="relative z-10 max-w-2xl">
-                            <h1 class="text-4xl font-bold text-white drop-shadow-lg md:text-5xl">
-                                {{ hero.title || productName }}
-                            </h1>
-                            <p v-if="hero.subtitle" class="mt-3 text-xl text-white/90 drop-shadow md:text-2xl">
-                                {{ hero.subtitle }}
-                            </p>
-                            <p class="mt-5 text-sm text-white/80 md:text-base">
-                                Seu progresso: {{ progress_percent }}%
-                            </p>
-                        </div>
-                    </section>
+                    <MemberAreaHero
+                        :hero="hero"
+                        :product-name="productName"
+                        show-progress
+                        :progress-percent="progress_percent"
+                        :offset-header="false"
+                    />
                     <header
                         class="pointer-events-none absolute left-0 top-0 right-0 z-20 flex h-14 items-center justify-start gap-6 px-4 md:px-6"
                         :style="{ color: 'var(--ma-text)' }"

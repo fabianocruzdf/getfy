@@ -98,6 +98,11 @@ class CheckoutPaymentMethodsBuilder
                 if (! $supportsDeclared && ! $legacyPaypalCard) {
                     continue;
                 }
+                if ($slug === 'cajupay' && $methodKey === 'pix_auto') {
+                    if ($plan === null || ! \App\Services\CajuPaySubscriptionService::supportsPlanInterval((string) $plan->interval)) {
+                        continue;
+                    }
+                }
                 if (! self::gatewaySupportsMethod($slug, $methodKey, $cred)) {
                     continue;
                 }
@@ -173,7 +178,7 @@ class CheckoutPaymentMethodsBuilder
         if ($slug === 'mercadopago' && in_array($methodKey, ['card', 'pix', 'boleto'], true)) {
             return trim((string) ($creds['public_key'] ?? '')) !== '';
         }
-        if ($slug === 'cajupay' && in_array($methodKey, ['card', 'apple_pay', 'google_pay', 'pix', 'boleto', 'pix_parcelado'], true)) {
+        if ($slug === 'cajupay' && in_array($methodKey, ['card', 'apple_pay', 'google_pay', 'pix', 'boleto', 'pix_parcelado', 'pix_auto'], true)) {
             if (trim((string) ($creds['public_key'] ?? '')) === ''
                 || trim((string) ($creds['secret_key'] ?? '')) === '') {
                 return false;

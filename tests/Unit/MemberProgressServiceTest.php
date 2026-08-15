@@ -63,5 +63,15 @@ class MemberProgressServiceTest extends TestCase
         $this->assertArrayHasKey($lessonDone->id, $set);
         $this->assertArrayNotHasKey($lessonPending->id, $set);
         $this->assertSame(1, $service->completedLessonsCount($product, $user));
+        $this->assertFalse($service->isModuleCompleted($module, $user));
+        MemberLessonProgress::create([
+            'user_id' => $user->id,
+            'member_lesson_id' => $lessonPending->id,
+            'product_id' => $product->id,
+            'completed_at' => now(),
+            'progress_percent' => 100,
+        ]);
+        $this->assertTrue($service->isModuleCompleted($module, $user));
+        $this->assertSame(100, $service->moduleCompletionPercent($module, $user));
     }
 }

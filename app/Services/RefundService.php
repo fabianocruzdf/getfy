@@ -240,13 +240,26 @@ class RefundService
         $clientRefundId = $refundRequest->client_refund_id ?: ('getfy-order-'.$order->id.'-refund');
         $response = $this->cajuPayDriver->createPixRefund($paymentId, $credentials, $clientRefundId);
 
+        $status = strtolower((string) ($response['status'] ?? ''));
+        $failureReason = null;
+        if ($status === 'pending_balance') {
+            $failureReason = 'Aguardando saldo na carteira CajuPay para enviar o reembolso ao provedor.';
+        } elseif ($status === 'failed') {
+            $failureReason = trim((string) ($response['last_error'] ?? 'Falha no envio do reembolso à CajuPay.'));
+        }
+
         $refundRequest->update([
-            'status' => RefundRequest::STATUS_PROCESSING,
+            'status' => $status === 'failed' ? RefundRequest::STATUS_FAILED : RefundRequest::STATUS_PROCESSING,
             'cajupay_payment_id' => $paymentId,
             'cajupay_refund_id' => is_string($response['id'] ?? null) ? $response['id'] : ($refundRequest->cajupay_refund_id),
             'client_refund_id' => $clientRefundId,
             'gateway_response' => $response,
+            'failure_reason' => $failureReason,
         ]);
+
+        if ($status === 'failed') {
+            throw new \RuntimeException('CajuPay reembolso: '.($failureReason ?: 'Falha ao processar reembolso PIX.'));
+        }
 
         $meta = $order->metadata ?? [];
         $meta['cajupay_payment_id'] = $paymentId;
@@ -397,9 +410,15 @@ class RefundService
                 ]);
             }
 
+            $fresh = $refundRequest->fresh();
+            $gatewayStatus = strtolower((string) (data_get($fresh?->gateway_response, 'status') ?? ''));
+            $message = $gatewayStatus === 'pending_balance'
+                ? 'Reembolso PIX registrado na CajuPay, mas a carteira está sem saldo. Credite a conta e use retry no painel CajuPay, ou tente novamente aqui.'
+                : 'Reembolso PIX enviado à CajuPay. O pedido será atualizado quando o gateway confirmar.';
+
             return [
-                'refund_request' => $refundRequest->fresh(),
-                'message' => 'Reembolso PIX enviado à CajuPay. O pedido será atualizado quando o gateway confirmar.',
+                'refund_request' => $fresh,
+                'message' => $message,
                 'auto_cajupay_pix' => true,
             ];
         }
@@ -547,7 +566,7 @@ class RefundService
         }
 
         if (str_starts_with($message, 'CajuPay reembolso:')) {
-            return $message;
+            return trim(substr($message, strlen('CajuPay reembolso:'))) ?: $message;
         }
 
         return $message;

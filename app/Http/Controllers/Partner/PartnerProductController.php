@@ -122,10 +122,73 @@ class PartnerProductController extends Controller
 
         $validated = $request->validate([
             'affiliate_pixels' => ['nullable', 'array'],
+            'affiliate_pixels.meta' => ['nullable', 'array'],
+            'affiliate_pixels.meta.enabled' => ['nullable', 'boolean'],
+            'affiliate_pixels.meta.entries' => ['nullable', 'array'],
+            'affiliate_pixels.meta.entries.*.id' => ['nullable', 'string', 'max:64'],
+            'affiliate_pixels.meta.entries.*.pixel_id' => ['nullable', 'string', 'max:64'],
+            'affiliate_pixels.meta.entries.*.access_token' => ['nullable', 'string', 'max:500'],
+            'affiliate_pixels.meta.entries.*.fire_purchase_on_pix' => ['nullable', 'boolean'],
+            'affiliate_pixels.meta.entries.*.fire_purchase_on_boleto' => ['nullable', 'boolean'],
+            'affiliate_pixels.meta.entries.*.disable_order_bump_events' => ['nullable', 'boolean'],
+            'affiliate_pixels.tiktok' => ['nullable', 'array'],
+            'affiliate_pixels.tiktok.enabled' => ['nullable', 'boolean'],
+            'affiliate_pixels.tiktok.entries' => ['nullable', 'array'],
+            'affiliate_pixels.tiktok.entries.*.id' => ['nullable', 'string', 'max:64'],
+            'affiliate_pixels.tiktok.entries.*.pixel_id' => ['nullable', 'string', 'max:64'],
+            'affiliate_pixels.tiktok.entries.*.access_token' => ['nullable', 'string', 'max:500'],
+            'affiliate_pixels.tiktok.entries.*.fire_purchase_on_pix' => ['nullable', 'boolean'],
+            'affiliate_pixels.tiktok.entries.*.fire_purchase_on_boleto' => ['nullable', 'boolean'],
+            'affiliate_pixels.tiktok.entries.*.disable_order_bump_events' => ['nullable', 'boolean'],
+            'affiliate_pixels.google_ads' => ['nullable', 'array'],
+            'affiliate_pixels.google_ads.enabled' => ['nullable', 'boolean'],
+            'affiliate_pixels.google_ads.entries' => ['nullable', 'array'],
+            'affiliate_pixels.google_ads.entries.*.id' => ['nullable', 'string', 'max:64'],
+            'affiliate_pixels.google_ads.entries.*.conversion_id' => ['nullable', 'string', 'max:64'],
+            'affiliate_pixels.google_ads.entries.*.conversion_label' => ['nullable', 'string', 'max:64'],
+            'affiliate_pixels.google_ads.entries.*.fire_purchase_on_pix' => ['nullable', 'boolean'],
+            'affiliate_pixels.google_ads.entries.*.fire_purchase_on_boleto' => ['nullable', 'boolean'],
+            'affiliate_pixels.google_ads.entries.*.disable_order_bump_events' => ['nullable', 'boolean'],
+            'affiliate_pixels.google_analytics' => ['nullable', 'array'],
+            'affiliate_pixels.google_analytics.enabled' => ['nullable', 'boolean'],
+            'affiliate_pixels.google_analytics.entries' => ['nullable', 'array'],
+            'affiliate_pixels.google_analytics.entries.*.id' => ['nullable', 'string', 'max:64'],
+            'affiliate_pixels.google_analytics.entries.*.measurement_id' => ['nullable', 'string', 'max:64'],
+            'affiliate_pixels.google_analytics.entries.*.fire_purchase_on_pix' => ['nullable', 'boolean'],
+            'affiliate_pixels.google_analytics.entries.*.fire_purchase_on_boleto' => ['nullable', 'boolean'],
+            'affiliate_pixels.google_analytics.entries.*.disable_order_bump_events' => ['nullable', 'boolean'],
         ]);
 
-        $affiliate->update(['affiliate_pixels' => $validated['affiliate_pixels'] ?? []]);
+        $pixels = $this->sanitizeAffiliatePixels($validated['affiliate_pixels'] ?? []);
+        $affiliate->update(['affiliate_pixels' => $pixels]);
 
         return back()->with('success', 'Pixels atualizados.');
+    }
+
+    /**
+     * Mantém apenas plataformas de ads/analytics; remove vetores de XSS.
+     *
+     * @param  array<string, mixed>  $pixels
+     * @return array<string, mixed>
+     */
+    private function sanitizeAffiliatePixels(array $pixels): array
+    {
+        $out = [
+            'meta' => is_array($pixels['meta'] ?? null) ? $pixels['meta'] : ['enabled' => false, 'entries' => []],
+            'tiktok' => is_array($pixels['tiktok'] ?? null) ? $pixels['tiktok'] : ['enabled' => false, 'entries' => []],
+            'google_ads' => is_array($pixels['google_ads'] ?? null) ? $pixels['google_ads'] : ['enabled' => false, 'entries' => []],
+            'google_analytics' => is_array($pixels['google_analytics'] ?? null) ? $pixels['google_analytics'] : ['enabled' => false, 'entries' => []],
+            'gtm' => ['enabled' => false, 'container_id' => ''],
+            'custom_script' => [],
+            'custom_script_integration_ids' => [],
+        ];
+
+        // Afiliados não usam integrações centralizadas do produtor.
+        foreach (['meta', 'tiktok', 'google_ads', 'google_analytics'] as $platform) {
+            unset($out[$platform]['integration_ids']);
+            $out[$platform]['integration_ids'] = [];
+        }
+
+        return $out;
     }
 }

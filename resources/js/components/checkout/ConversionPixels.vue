@@ -358,19 +358,14 @@ function injectCustomScripts() {
         s.innerHTML = item.script;
         const scripts = s.querySelectorAll('script');
         scripts.forEach((script) => {
-            if (script.src && !isAllowedScriptSrc(script.src)) return;
+            // Só permite scripts com src em allowlist — bloqueia inline (XSS).
+            if (!script.src || !isAllowedScriptSrc(script.src)) return;
             const newScript = document.createElement('script');
-            if (script.src) newScript.src = script.src;
-            if (script.innerHTML) newScript.innerHTML = script.innerHTML;
+            newScript.src = script.src;
             newScript.async = script.async ?? true;
             document.head.appendChild(newScript);
         });
-        const nonScripts = s.childNodes;
-        nonScripts.forEach((node) => {
-            if (node.nodeType === 1 && node.tagName !== 'SCRIPT') {
-                document.head.appendChild(node.cloneNode(true));
-            }
-        });
+        // Não clonar nós não-script (img onerror, svg, etc.).
     });
 }
 

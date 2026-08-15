@@ -17,6 +17,7 @@ class ProductOrderBump extends Model
         'title',
         'description',
         'price_override',
+        'is_free',
         'cta_title',
         'position',
     ];
@@ -25,6 +26,7 @@ class ProductOrderBump extends Model
     {
         return [
             'price_override' => 'decimal:2',
+            'is_free' => 'boolean',
         ];
     }
 
@@ -85,6 +87,9 @@ class ProductOrderBump extends Model
      */
     public function getEffectiveAmountBrl(): float
     {
+        if ($this->is_free) {
+            return 0.0;
+        }
         if ($this->price_override !== null) {
             return (float) $this->price_override;
         }

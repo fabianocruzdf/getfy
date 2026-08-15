@@ -38,6 +38,8 @@ const props = defineProps({
     editingModuleReleaseMode: { type: String, default: 'none' },
     editingModuleReleaseAfterDays: { type: String, default: '' },
     editingModuleReleaseAtDate: { type: String, default: '' },
+    editingModuleReleaseProgressPercent: { type: String, default: '' },
+    editingModuleReleaseRequiredModuleIds: { type: Array, default: () => [] },
     editingModuleAccessDurationDays: { type: String, default: '' },
     editingModuleRequiresPreviousModules: { type: Boolean, default: false },
     editingModuleReleaseDependencies: { type: Array, default: () => [] },
@@ -87,6 +89,8 @@ const emit = defineEmits([
     'update:editingModuleReleaseMode',
     'update:editingModuleReleaseAfterDays',
     'update:editingModuleReleaseAtDate',
+    'update:editingModuleReleaseProgressPercent',
+    'update:editingModuleReleaseRequiredModuleIds',
     'update:editingModuleAccessDurationDays',
     'update:editingModuleRequiresPreviousModules',
     'update:editingModuleReleaseDependencies',
@@ -103,6 +107,20 @@ const selectedSection = computed(() =>
 const selectedModule = computed(() =>
     selectedSection.value?.modules?.find((m) => m.id === selectedModuleId.value) ?? null,
 );
+
+const productModulesForPrereq = computed(() => {
+    const list = [];
+    for (const s of sections.value || []) {
+        for (const m of s.modules || []) {
+            list.push({
+                id: m.id,
+                title: m.title,
+                section_title: s.title,
+            });
+        }
+    }
+    return list;
+});
 
 const isCoursesSection = computed(() =>
     (selectedSection.value?.section_type ?? 'courses') === 'courses',
@@ -412,6 +430,7 @@ const columnClass = (step) => [
                         :input-class="inputClass"
                         :upload-limits="uploadLimits"
                         :tenant-products="tenantProducts"
+                        :product-modules="productModulesForPrereq"
                         :editing-title="editingModuleTitle"
                         :editing-show-title-on-cover="editingModuleShowTitleOnCover"
                         :editing-related-product-id="editingModuleRelatedProductId"
@@ -420,6 +439,8 @@ const columnClass = (step) => [
                         :editing-release-mode="editingModuleReleaseMode"
                         :editing-release-after-days="editingModuleReleaseAfterDays"
                         :editing-release-at-date="editingModuleReleaseAtDate"
+                        :editing-release-progress-percent="editingModuleReleaseProgressPercent"
+                        :editing-release-required-module-ids="editingModuleReleaseRequiredModuleIds"
                         :editing-access-duration-days="editingModuleAccessDurationDays"
                         :editing-requires-previous-modules="editingModuleRequiresPreviousModules"
                         :editing-release-dependencies="editingModuleReleaseDependencies"
@@ -435,6 +456,8 @@ const columnClass = (step) => [
                         @update:editing-release-mode="emit('update:editingModuleReleaseMode', $event)"
                         @update:editing-release-after-days="emit('update:editingModuleReleaseAfterDays', $event)"
                         @update:editing-release-at-date="emit('update:editingModuleReleaseAtDate', $event)"
+                        @update:editing-release-progress-percent="emit('update:editingModuleReleaseProgressPercent', $event)"
+                        @update:editing-release-required-module-ids="emit('update:editingModuleReleaseRequiredModuleIds', $event)"
                         @update:editing-access-duration-days="emit('update:editingModuleAccessDurationDays', $event)"
                         @update:editing-requires-previous-modules="emit('update:editingModuleRequiresPreviousModules', $event)"
                         @update:editing-release-dependencies="emit('update:editingModuleReleaseDependencies', $event)"

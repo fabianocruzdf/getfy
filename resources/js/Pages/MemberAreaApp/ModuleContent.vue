@@ -363,9 +363,9 @@ function scrollCarousel(sectionId, direction) {
             </template>
 
             <template v-else-if="current_lesson">
-                <div class="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start lg:gap-8">
-                    <div class="min-w-0 max-w-full space-y-5">
-                        <div class="transition-all duration-300 ease-out">
+                <div class="lesson-stage grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_26rem] lg:items-start lg:gap-5 lg:-mr-6">
+                    <div class="lesson-main min-w-0 space-y-5 lg:pr-1">
+                        <div class="lesson-video-shell transition-all duration-300 ease-out">
                             <MemberLessonContent
                                 :lesson="current_lesson"
                                 :member-area-base-url="memberAreaBaseUrl"
@@ -414,9 +414,7 @@ function scrollCarousel(sectionId, direction) {
                         />
                     </div>
 
-                    <aside
-                        class="hidden min-h-0 lg:block lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem-1rem)] lg:max-h-[calc(100vh-3.5rem-1rem)] lg:overflow-hidden lg:self-start"
-                    >
+                    <aside class="lesson-sidebar hidden min-h-0 lg:block">
                         <MemberLessonSidebar
                             class="h-full"
                             :module="module"
@@ -445,9 +443,7 @@ function scrollCarousel(sectionId, direction) {
                     </div>
             </main>
 
-            <aside
-                class="hidden min-h-0 w-80 shrink-0 lg:block lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem-1rem)] lg:max-h-[calc(100vh-3.5rem-1rem)] lg:overflow-hidden lg:self-start"
-            >
+            <aside class="lesson-sidebar hidden min-h-0 w-80 shrink-0 lg:block">
                 <MemberLessonSidebar
                     class="h-full"
                     :module="module"
@@ -556,3 +552,30 @@ function scrollCarousel(sectionId, direction) {
         </section>
     </div>
 </template>
+
+<style scoped>
+@media (min-width: 1024px) {
+    /* Padrão Hotmart: conteúdo flexível à esquerda, trilho de aulas colado à direita */
+    .lesson-stage {
+        align-items: start;
+        min-height: calc(100vh - 3.5rem - 1.5rem);
+    }
+
+    .lesson-video-shell {
+        width: 100%;
+    }
+
+    .lesson-sidebar {
+        position: sticky;
+        top: 3.5rem;
+        align-self: start;
+        width: 100%;
+        height: calc(100vh - 3.5rem);
+        max-height: calc(100vh - 3.5rem);
+        overflow: hidden;
+        margin: 0;
+        padding-right: 1.5rem; /* compensa -mr-6 e respira na borda */
+        box-sizing: border-box;
+    }
+}
+</style>

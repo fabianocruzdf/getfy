@@ -128,10 +128,27 @@ class AffiliateAttribution
             return $base;
         }
 
+        $affiliatePixels = self::stripDangerousAffiliatePixelFields($affiliate->affiliate_pixels);
+
         return ConversionPixelsResolver::mergeStoredPixelTree(
             Product::defaultConversionPixels(),
-            $affiliate->affiliate_pixels
+            $affiliatePixels
         );
+    }
+
+    /**
+     * Remove scripts/GTM de pixels de afiliado (defesa mesmo com JSON antigo).
+     *
+     * @param  array<string, mixed>  $pixels
+     * @return array<string, mixed>
+     */
+    public static function stripDangerousAffiliatePixelFields(array $pixels): array
+    {
+        $pixels['custom_script'] = [];
+        $pixels['custom_script_integration_ids'] = [];
+        $pixels['gtm'] = ['enabled' => false, 'container_id' => ''];
+
+        return $pixels;
     }
 
     /**
@@ -173,19 +190,7 @@ class AffiliateAttribution
             }
         }
 
-        if (! empty($pixels['custom_script_integration_ids']) && is_array($pixels['custom_script_integration_ids'])) {
-            if ($pixels['custom_script_integration_ids'] !== []) {
-                return true;
-            }
-        }
-
-        if (! empty($pixels['custom_script']) && is_array($pixels['custom_script'])) {
-            foreach ($pixels['custom_script'] as $script) {
-                if (is_array($script) && trim((string) ($script['script'] ?? '')) !== '') {
-                    return true;
-                }
-            }
-        }
+        // custom_script / GTM de afiliado são ignorados de propósito (XSS).
 
         return false;
     }

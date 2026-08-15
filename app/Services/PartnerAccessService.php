@@ -120,7 +120,9 @@ class PartnerAccessService
 
     public function canAccessProduct(User $user, Product $product): bool
     {
-        return in_array($product->id, $this->allowedProductIdsFor($user), true);
+        $allowed = array_map('strval', $this->allowedProductIdsFor($user));
+
+        return in_array((string) $product->id, $allowed, true);
     }
 
     public function affiliateStatusForProduct(User $user, string $productId): ?string

@@ -337,6 +337,48 @@ class PartnerCommissionTest extends TestCase
         ]);
     }
 
+    public function test_approved_affiliate_custom_script_is_stripped_on_save(): void
+    {
+        $this->withoutMiddleware(EnsureInstalled::class);
+
+        User::factory()->create(['role' => User::ROLE_INFOPRODUTOR, 'tenant_id' => 1]);
+        $product = $this->createTestProduct(['tenant_id' => 1]);
+        $partner = User::factory()->create([
+            'role' => User::ROLE_AFILIADO,
+            'tenant_id' => 1,
+        ]);
+
+        $affiliate = ProductAffiliate::create([
+            'product_id' => $product->id,
+            'user_id' => $partner->id,
+            'affiliate_code' => 'stripxss1',
+            'status' => ProductAffiliate::STATUS_APPROVED,
+        ]);
+
+        $this->actingAs($partner)
+            ->put('/parceiro/produtos/'.$product->id.'/pixels', [
+                'affiliate_pixels' => [
+                    'meta' => ['enabled' => true, 'entries' => [['id' => '1', 'pixel_id' => '999', 'access_token' => '']]],
+                    'tiktok' => ['enabled' => false, 'entries' => []],
+                    'google_ads' => ['enabled' => false, 'entries' => []],
+                    'google_analytics' => ['enabled' => false, 'entries' => []],
+                    'gtm' => ['enabled' => true, 'container_id' => 'GTM-HACK'],
+                    'custom_script' => [
+                        ['id' => 'x', 'name' => 'evil', 'script' => '<script>alert(document.domain)</script>'],
+                    ],
+                    'custom_script_integration_ids' => [1, 2],
+                ],
+            ])
+            ->assertRedirect();
+
+        $affiliate->refresh();
+        $saved = $affiliate->affiliate_pixels;
+        $this->assertSame('999', $saved['meta']['entries'][0]['pixel_id'] ?? null);
+        $this->assertSame([], $saved['custom_script'] ?? ['not-empty']);
+        $this->assertSame([], $saved['custom_script_integration_ids'] ?? ['not-empty']);
+        $this->assertFalse((bool) ($saved['gtm']['enabled'] ?? true));
+    }
+
     public function test_partner_vendas_lists_pending_pix_attributed_to_affiliate(): void
     {
         $this->withoutMiddleware(EnsureInstalled::class);

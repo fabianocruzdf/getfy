@@ -503,7 +503,9 @@ function onCouponCleared() {
     appliedCoupon.value = null;
 }
 
-const selectedOrderBumpIds = ref([]);
+const selectedOrderBumpIds = ref(
+    (props.order_bumps || []).filter((b) => b.is_free).map((b) => b.id)
+);
 const selectedOrderBumpsList = computed(() => {
     const ids = new Set(selectedOrderBumpIds.value);
     return (props.order_bumps || []).filter((b) => ids.has(b.id));

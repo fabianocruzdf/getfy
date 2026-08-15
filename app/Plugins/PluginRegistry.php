@@ -521,11 +521,39 @@ class PluginRegistry
         $errors = array_merge($errors, self::validateCapabilities($manifest));
         $errors = array_merge($errors, self::validateRenderZones($manifest));
         $errors = array_merge($errors, PluginMiddlewareRegistry::validateManifestEntries($manifest));
+        $errors = array_merge($errors, \App\Support\PluginManifestSchema::validate($manifest));
+        $errors = array_merge($errors, \App\Support\PluginRequirements::validate($manifest));
+        $errors = array_merge($errors, \App\Support\PluginPackageIntegrity::verifyExtractedPackage($pluginPath));
+        $errors = array_merge($errors, self::validateGatewayHints($manifest));
         $routes = $manifest['routes'] ?? null;
         if (is_string($routes) && $routes !== '') {
             $routesFile = $pluginPath.DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $routes);
             if (! is_file($routesFile)) {
                 $errors[] = "Arquivo de rotas não encontrado: {$routes}";
+            }
+        }
+
+        return $errors;
+    }
+
+    /**
+     * @param  array<string, mixed>  $manifest
+     * @return array<int, string>
+     */
+    private static function validateGatewayHints(array $manifest): array
+    {
+        $type = strtolower(trim((string) ($manifest['type'] ?? '')));
+        if ($type !== 'gateway' && $type !== 'payment_gateway') {
+            return [];
+        }
+        $errors = [];
+        $allowedMethods = ['pix', 'card', 'boleto', 'pix_auto', 'apple_pay', 'google_pay', 'paypal', 'pix_parcelado'];
+        $methods = $manifest['gateway']['methods'] ?? null;
+        if (is_array($methods)) {
+            foreach ($methods as $method) {
+                if (! is_string($method) || ! in_array($method, $allowedMethods, true)) {
+                    $errors[] = 'gateway.methods contém valor inválido: '.(string) $method;
+                }
             }
         }
 

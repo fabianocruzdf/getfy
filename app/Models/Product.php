@@ -605,6 +605,9 @@ class Product extends Model
                 'subtitle' => '',
                 'overlay' => true,
                 'overlay_opacity' => 50,
+                'slides' => [],
+                'autoplay' => true,
+                'autoplay_interval' => 5,
             ],
             'header' => [
                 'logo_url' => null,
@@ -671,7 +674,85 @@ class Product extends Model
         if (($theme['sidebar_bg'] ?? '') === '#1e293b') {
             $config['theme']['sidebar_bg'] = '#27272a';
         }
+
+        $config['hero'] = static::normalizeMemberAreaHero($config['hero'] ?? []);
+
         return $config;
+    }
+
+    /**
+     * Garante slides[] a partir do hero legado (imagem única desktop/mobile).
+     *
+     * @param  array<string, mixed>  $hero
+     * @return array<string, mixed>
+     */
+    public static function normalizeMemberAreaHero(array $hero): array
+    {
+        $slides = is_array($hero['slides'] ?? null) ? array_values($hero['slides']) : [];
+        $slides = array_values(array_filter($slides, static function ($slide) {
+            if (! is_array($slide)) {
+                return false;
+            }
+            $desk = trim((string) ($slide['image_url_desktop'] ?? $slide['image_url'] ?? ''));
+            $mob = trim((string) ($slide['image_url_mobile'] ?? ''));
+            $title = trim((string) ($slide['title'] ?? ''));
+            $subtitle = trim((string) ($slide['subtitle'] ?? ''));
+
+            return $desk !== '' || $mob !== '' || $title !== '' || $subtitle !== '';
+        }));
+
+        if ($slides === []) {
+            $desk = trim((string) ($hero['image_url_desktop'] ?? $hero['image_url'] ?? ''));
+            $mob = trim((string) ($hero['image_url_mobile'] ?? ''));
+            $title = trim((string) ($hero['title'] ?? ''));
+            $subtitle = trim((string) ($hero['subtitle'] ?? ''));
+            if ($desk !== '' || $mob !== '') {
+                $slides[] = [
+                    'id' => 'legacy',
+                    'image_url_desktop' => $desk !== '' ? $desk : null,
+                    'image_url_mobile' => $mob !== '' ? $mob : null,
+                    'title' => $title,
+                    'subtitle' => $subtitle,
+                ];
+            }
+        }
+
+        $normalizedSlides = [];
+        foreach ($slides as $index => $slide) {
+            if (! is_array($slide)) {
+                continue;
+            }
+            $desk = trim((string) ($slide['image_url_desktop'] ?? $slide['image_url'] ?? ''));
+            $mob = trim((string) ($slide['image_url_mobile'] ?? ''));
+            $normalizedSlides[] = [
+                'id' => (string) ($slide['id'] ?? ('slide-'.$index)),
+                'image_url_desktop' => $desk !== '' ? $desk : null,
+                'image_url_mobile' => $mob !== '' ? $mob : null,
+                'title' => trim((string) ($slide['title'] ?? '')),
+                'subtitle' => trim((string) ($slide['subtitle'] ?? '')),
+            ];
+        }
+
+        $hero['slides'] = $normalizedSlides;
+        $hero['autoplay'] = array_key_exists('autoplay', $hero) ? (bool) $hero['autoplay'] : true;
+        $interval = (int) ($hero['autoplay_interval'] ?? 5);
+        $hero['autoplay_interval'] = max(2, min(30, $interval > 0 ? $interval : 5));
+
+        // Mantém campos legados sincronizados com o 1º slide (compatibilidade).
+        $first = $normalizedSlides[0] ?? null;
+        if ($first) {
+            $hero['image_url_desktop'] = $first['image_url_desktop'];
+            $hero['image_url_mobile'] = $first['image_url_mobile'];
+            $hero['image_url'] = $first['image_url_desktop'] ?? $first['image_url_mobile'];
+            if (trim((string) ($hero['title'] ?? '')) === '' && ($first['title'] ?? '') !== '') {
+                $hero['title'] = $first['title'];
+            }
+            if (trim((string) ($hero['subtitle'] ?? '')) === '' && ($first['subtitle'] ?? '') !== '') {
+                $hero['subtitle'] = $first['subtitle'];
+            }
+        }
+
+        return $hero;
     }
 
     public function users(): BelongsToMany

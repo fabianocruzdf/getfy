@@ -11,6 +11,7 @@ const { resolve: resolvePluginPanel } = usePluginComponentResolver(
 );
 import { ChevronLeft, ChevronRight, Lock, LockOpen } from 'lucide-vue-next';
 import MemberAreaAppLayout from '@/Layouts/MemberAreaAppLayout.vue';
+import MemberAreaHero from '@/components/member-area/MemberAreaHero.vue';
 import Button from '@/components/ui/Button.vue';
 
 defineOptions({ layout: MemberAreaAppLayout });
@@ -64,13 +65,6 @@ const props = defineProps({
 const memberPluginPanels = () => inertiaPage.props.plugin_member_panels ?? props.plugin_member_panels ?? [];
 
 const hero = props.config?.hero ?? {};
-const heroDesktopBg = hero.image_url_desktop || hero.image_url || null;
-const heroMobileBg = hero.image_url_mobile || hero.image_url_desktop || hero.image_url || null;
-const heroGradient = 'linear-gradient(135deg, var(--ma-primary) 0%, #27272a 100%)';
-const heroOverlayOpacity = (() => {
-    const raw = hero.overlay_opacity ?? 50;
-    return (raw <= 1 ? raw * 100 : raw) / 100;
-})();
 
 function isPaidProductSection(mod) {
     return (mod.access_type ?? 'paid') === 'paid';
@@ -89,41 +83,8 @@ function productSectionUnlocked(mod) {
 <template>
     <div class="flex gap-6">
         <div class="min-w-0 flex-1 space-y-8">
-        <!-- Hero (estilo Netflix: desktop e mobile com banners separados) -->
-        <section
-            class="relative -mx-6 -mt-14 flex min-h-[55vh] items-end justify-start overflow-hidden bg-cover bg-center px-8 pb-10 pt-24 md:min-h-[65vh] md:px-10 md:pb-14 md:pt-28"
-            :style="{ backgroundImage: heroGradient }"
-        >
-            <!-- Banner desktop (visível em md+) -->
-            <div
-                v-if="heroDesktopBg"
-                class="absolute inset-0 hidden bg-cover bg-center md:block"
-                :style="{ backgroundImage: `url(${heroDesktopBg})` }"
-            />
-            <!-- Banner mobile (visível em telas pequenas) -->
-            <div
-                v-if="heroMobileBg"
-                class="absolute inset-0 bg-cover bg-center md:hidden"
-                :style="{ backgroundImage: `url(${heroMobileBg})` }"
-            />
-            <div
-                class="absolute inset-0 bg-black"
-                :style="{ opacity: heroOverlayOpacity }"
-            />
-            <!-- Overlay gradiente embaixo: esfumaça na cor do fundo -->
-            <div
-                class="pointer-events-none absolute inset-x-0 bottom-0 h-1/2"
-                :style="{ background: `linear-gradient(to top, var(--ma-bg) 0%, transparent 100%)` }"
-            />
-            <div class="relative z-10 max-w-2xl">
-                <h1 class="text-4xl font-bold text-white drop-shadow-lg md:text-5xl">
-                    {{ hero.title || product.name }}
-                </h1>
-                <p v-if="hero.subtitle" class="mt-3 text-xl text-white/90 drop-shadow md:text-2xl">
-                    {{ hero.subtitle }}
-                </p>
-            </div>
-        </section>
+        <!-- Hero (carrossel com autoplay; 1 slide = banner estático) -->
+        <MemberAreaHero :hero="hero" :product-name="product.name" />
 
         <!-- Continuar assistindo (carrossel: um item por seção) -->
         <section v-if="continue_watching?.length" class="space-y-4">

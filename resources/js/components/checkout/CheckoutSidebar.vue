@@ -35,6 +35,15 @@ const props = defineProps({
 
 const appearance = computed(() => props.config?.appearance ?? {});
 const primaryColor = computed(() => appearance.value.primary_color || '#7427F1');
+
+function freeLabel() {
+    const label = props.t('checkout.gratis');
+    if (!label || label === 'checkout.gratis') {
+        return 'Grátis';
+    }
+    return label;
+}
+
 const contentBlocks = computed(() => {
     const appearanceValue = appearance.value;
     const raw = appearanceValue.content_blocks;
@@ -109,7 +118,20 @@ const productPriceDisplay = computed(() => props.priceInCurrency(productPriceBrl
                 <template v-for="bump in selectedOrderBumps" :key="bump.id">
                     <div class="flex justify-between gap-3 text-sm">
                         <span class="truncate font-medium text-gray-600">+ {{ bump.title }}</span>
-                        <span class="shrink-0 font-semibold text-gray-900">{{ formatPrice(priceInCurrency(bump.amount_brl), displayCurrency) }}</span>
+                        <span class="shrink-0 font-semibold text-gray-900">
+                            <template v-if="bump.is_free || Number(bump.amount_brl) <= 0">
+                                <span
+                                    v-if="bump.original_amount_brl != null && Number(bump.original_amount_brl) > 0"
+                                    class="mr-1.5 text-gray-400 line-through"
+                                >{{ formatPrice(priceInCurrency(bump.original_amount_brl), displayCurrency) }}</span>
+                                <span class="inline-flex items-center rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
+                                    {{ freeLabel() }}
+                                </span>
+                            </template>
+                            <template v-else>
+                                {{ formatPrice(priceInCurrency(bump.amount_brl), displayCurrency) }}
+                            </template>
+                        </span>
                     </div>
                 </template>
                 <div v-if="discountAmountBrl > 0" class="flex justify-between gap-3 text-sm text-emerald-600">

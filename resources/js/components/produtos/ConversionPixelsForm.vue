@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, computed, watch } from 'vue';
 import Button from '@/components/ui/Button.vue';
 import Toggle from '@/components/ui/Toggle.vue';
 import Checkbox from '@/components/ui/Checkbox.vue';
@@ -20,7 +20,18 @@ const model = defineModel({ type: Object, required: true });
 const props = defineProps({
     disabled: { type: Boolean, default: false },
     availableIntegrations: { type: Object, default: () => ({}) },
+    /** Quando false, oculta GTM e scripts personalizados (ex.: painel do afiliado). */
+    allowCustomScript: { type: Boolean, default: true },
+    allowGtm: { type: Boolean, default: true },
 });
+
+const visiblePixelTabs = computed(() =>
+    PIXEL_TABS.filter((tab) => {
+        if (tab.id === 'custom_script' && !props.allowCustomScript) return false;
+        if (tab.id === 'gtm' && !props.allowGtm) return false;
+        return true;
+    })
+);
 
 function scriptIntegrations() {
     return props.availableIntegrations?.custom_script || [];
@@ -51,6 +62,12 @@ function isScriptIntegrationSelected(id) {
 
 const selectedPixelTab = ref('meta');
 
+watch(visiblePixelTabs, (tabs) => {
+    if (!tabs.some((tab) => tab.id === selectedPixelTab.value)) {
+        selectedPixelTab.value = tabs[0]?.id || 'meta';
+    }
+}, { immediate: true });
+
 const inputClass =
     'w-full rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm text-zinc-900 outline-none transition focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--color-primary)_25%,transparent)] dark:border-zinc-700 dark:bg-zinc-800 dark:text-white disabled:opacity-60';
 </script>
@@ -59,7 +76,7 @@ const inputClass =
     <div class="space-y-6" :class="{ 'pointer-events-none opacity-60': disabled }">
         <div class="flex gap-3 overflow-x-auto pb-2 scroll-smooth" style="scrollbar-width: thin;">
             <button
-                v-for="tab in PIXEL_TABS"
+                v-for="tab in visiblePixelTabs"
                 :key="tab.id"
                 type="button"
                 :disabled="disabled"

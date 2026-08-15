@@ -1,5 +1,5 @@
 # CajuPay — Documentação completa para LLMs
-> Gerado em 2026-06-15T02:04:29.263Z. Não edite à mão — rode `npm run build:llm-docs` no frontend.
+> Gerado em 2026-08-02T14:14:01.243Z. Não edite à mão — rode `npm run build:llm-docs` no frontend.
 > Pacote modular: https://cajupay.com.br/docs/llm/
 ---
 
@@ -14,7 +14,7 @@
 
 1. **Não invente rotas.** Use apenas endpoints documentados em `https://api.cajupay.com.br` (base deste pacote).
 2. **Segredos só no servidor.** `X-API-Secret` nunca vai para o browser, bundle frontend ou repositório público.
-3. **Valores em centavos.** `amount_cents: 2590` = R$ 25,90. Moeda padrão: `BRL`.
+3. **Valores em centavos.** `amount_cents: 2590` = R$ 25,90. Moeda padrão: `BRL`. **Mínimo de cobrança via API:** `amount_cents` ≥ **200** (R$ 2,00 em BRL; em outras moedas, 200 unidades menores da moeda de vitrine).
 4. **Cartão e wallets exigem HTTPS** na página do checkout em produção; HTTP local costuma falhar (PSP / formulário embed).
 5. **PCI:** PAN/CVV não passam pelo backend do integrador — use o SDK CajuPay (`embeddedOnly`) ou API server-side PIX.
 6. **Rotas tipo `/checkout/cajupay/*` não existem na CajuPay** — o integrador implementa wrappers no próprio backend; a API nativa é `/api/sdk/v1/...` e `/api/payments/pix`.
@@ -51,7 +51,9 @@ Sempre. Cole no início do contexto da IA junto com os módulos específicos do 
 | **Saques / carteira** | 14 (+ **23** para webhook outbound de saque) |
 | **Reembolso PIX (API)** | 18 (+ 12 webhook) |
 | **MED PIX (consulta + defesa)** | 19 (+ 12 webhook) |
-| **PIX completo (cobrança + pós-venda)** | 10, 12, **21**, 18, 19, 16 |
+| **Antifraude PIX (consulta + provas)** | 25 (+ 12 webhook) |
+| **Assinaturas PIX Automático / boleto** | **26**, **27** |
+| **PIX completo (cobrança + pós-venda)** | 10, 12, **21**, 18, 19, 25, 16 |
 | **Tudo** | `bundle/full.md` ou todos os `*.md` |
 
 ## Duas trilhas de pagamento (não misturar)
@@ -59,7 +61,7 @@ Sempre. Cole no início do contexto da IA junto com os módulos específicos do 
 | Trilha | Métodos | Como integrar |
 |--------|---------|---------------|
 | **SDK `embeddedOnly`** | Cartão, Apple Pay, Google Pay | Sessão SDK + CDN + `mountCheckout` |
-| **API REST** | PIX | `POST /api/payments/pix` no servidor — **sem** SDK no checkout |
+| **API REST** | PIX à vista, assinaturas, boleto | `POST /api/payments/pix`, `/api/subscriptions`, `/api/payments/boleto` |
 
 ## Prompt sugerido para o parceiro
 
@@ -254,7 +256,9 @@ Alternativa (painel / legado): `Authorization: Bearer <session_token>`.
 
 | Escopo | Uso |
 |--------|-----|
-| `payments.write` | PIX, sessões SDK, reembolso PIX |
+| `payments.write` | PIX, sessões SDK, reembolso PIX, boleto avulso |
+| `subscriptions.read` | Listar/consultar assinaturas e parcelas |
+| `subscriptions.write` | Criar/cancelar assinaturas, retry/refund de parcelas |
 | `wallet.read` | Saldo e extrato |
 | `payouts.write` | Saques e chaves PIX |
 | `webhooks.read` | Listar endpoints |
@@ -339,6 +343,7 @@ Sempre, junto com autenticação e qualquer POST de pagamento.
 |----------|-------------------|
 | `POST /api/payments/pix` | `Idempotency-Key` |
 | `POST /api/payouts` | `Idempotency-Key` |
+| `POST /api/subscriptions` | `Idempotency-Key` |
 | `POST /api/sdk/public/checkout/sessions/{token}/confirm` | `Idempotency-Key` (SDK gera se omitido) |
 
 Reutilizar a **mesma** chave com **mesmo** body → mesma resposta cacheada. Body diferente → `idempotency_key_reuse_mismatch`.
@@ -375,7 +380,7 @@ X-CajuPay-Checkout-Host: checkout.sualoja.com.br
 
 | HTTP | `error` (exemplos) | Significado |
 |------|-------------------|-------------|
-| 400 | `invalid_amount`, `missing_idempotency_key` | Body inválido |
+| 400 | `invalid_amount`, `below_minimum_charge_amount`, `missing_idempotency_key` | Body inválido ou valor abaixo do mínimo (200 centavos) |
 | 400 | `invalid_partner_checkout_url`, `https_required` | URL de checkout do parceiro inválida |
 | 400 | `method_not_available`, `payer_email_required` | Sessão/método/pagador |
 | 401 | — | Credenciais inválidas |
@@ -383,17 +388,21 @@ X-CajuPay-Checkout-Host: checkout.sualoja.com.br
 | 403 | `payouts_blocked_pending_kyc` | Saque sem KYC aprovado |
 | 404 | `session_not_found`, `payment_not_found` | Recurso inexistente |
 | 410 | `link_expired`, `link_inactive` | Sessão/link expirado |
+| 429 | `rate_limited` | Limite próprio (Redis) **ou** throttle da adquirente. Header `Retry-After` quando disponível |
 
 ## Rate limit
 
-Com Redis habilitado: limite por API Key ou IP. Webhook inbound PSP (`POST /webhooks/psp`) **não** usa o mesmo limitador.
+Com Redis habilitado: limite por API Key ou IP → HTTP **429** `{"error":"rate_limited"}`. Webhook inbound PSP (`POST /webhooks/psp`) **não** usa o mesmo limitador.
+
+Throttle da adquirente (assinaturas / payment-link PIX Automático): também HTTP **429**, `error: "rate_limited"`, `Retry-After` (segundos; default `5` se o upstream não enviar).
 
 ## Checklist
 
-- [ ] `Idempotency-Key` em PIX, payouts e confirms
+- [ ] `Idempotency-Key` em PIX, payouts, subscriptions e confirms
 - [ ] HTTPS no checkout embed (produção)
 - [ ] `partner_checkout_url` em PIX, sessões SDK e links via API (recomendado)
 - [ ] Tratamento de `error` no JSON de resposta
+- [ ] Retry em 429 respeitando `Retry-After`
 
 ---
 
@@ -544,6 +553,7 @@ const sdk = window.CajuPaySDK.init({ baseUrl: "https://api.cajupay.com.br" });
 Ver módulo 01. Resumo:
 
 - `POST /api/sdk/v1/checkout/sessions` com `X-API-Key` + `X-API-Secret`
+- **`amount_cents` ≥ 200** (R$ 2,00 em BRL; em outras moedas, 200 unidades menores da vitrine) — abaixo disso: `below_minimum_charge_amount`
 - **PIX:** não permitido (`allow_pix: true` → `400 pix_not_supported_on_sdk_checkout`). Use a API PIX server-side.
 - Defaults: `allow_card` true; com cartão, `allow_apple_pay` e `allow_google_pay` tendem a true
 - Se pedir wallet, CajuPay **promove** `allow_card: true` automaticamente (fallback)
@@ -1371,11 +1381,16 @@ Campo `split_id` no body — comissão sobre líquido após taxa de venda (módu
 
 Recebimento PIX **não** exige KYC aprovado. Saques sim (módulo 14).
 
+## Valor mínimo
+
+Toda criação de cobrança via API exige `amount_cents` **≥ 200** (R$ 2,00 em BRL). Abaixo disso: `400` com `below_minimum_charge_amount`.
+
 ## Erros comuns
 
 | `error` | Correção |
 |---------|----------|
-| `invalid_amount` | `amount_cents` > 0 |
+| `invalid_amount` | `amount_cents` ≤ 0 |
+| `below_minimum_charge_amount` | `amount_cents` ≥ 200 (R$ 2,00) |
 | `split_not_found` | UUID split inválido/inativo |
 | `idempotency_in_progress` | Retry com mesma key |
 
@@ -1588,18 +1603,19 @@ Após validar HMAC, processe `paid` para liberar produto mesmo se consulta à AP
 <!-- module: 12-webhooks-pix-med -->
 
 
-# Webhooks PIX — pagamento, reembolso e MED
+# Webhooks PIX — pagamento, reembolso, MED e antifraude
 
 ## INSTRUÇÕES PARA O MODELO
 
 1. Cadastre eventos `pix.payment.*` no mesmo endpoint ou em endpoint dedicado — mesma validação HMAC do módulo 11.
 2. **`pix.payment.paid`** é o canal principal para marcar pedido PIX pago — implemente handler idempotente.
-3. Mantenha **reconciliação em background** (módulo 21) como fallback se o webhook falhar.
-4. Worker `integrator-webhook-worker` + RabbitMQ obrigatórios para entrega.
+3. Trate também **`pix.payment.under_review`** e **`pix.payment.antifraud_resolved`** (módulo 25) se o parceiro opera com hold antifraude.
+4. Mantenha **reconciliação em background** (módulo 21) como fallback se o webhook falhar.
+5. Worker `integrator-webhook-worker` + RabbitMQ obrigatórios para entrega.
 
 ## Quando usar este módulo
 
-Integrador PIX: confirmar pagamento, automatizar pós-venda (reembolso) e ciclo MED.
+Integrador PIX: confirmar pagamento, automatizar pós-venda (reembolso), ciclo MED e análise antifraude.
 
 ## Cadastro de eventos
 
@@ -1610,6 +1626,8 @@ No painel `/api?tab=webhooks` ou:
   "url": "https://seu-servidor.com/webhooks/cajupay",
   "event_types": [
     "pix.payment.paid",
+    "pix.payment.under_review",
+    "pix.payment.antifraud_resolved",
     "pix.payment.refunded",
     "pix.payment.med_opened",
     "pix.payment.med_resolved"
@@ -1631,7 +1649,9 @@ Igual ao módulo 11:
 
 | `type` | Quando | Ação sugerida no parceiro |
 |--------|--------|---------------------------|
-| `pix.payment.paid` | PIX confirmado na CajuPay | Marcar pedido pago; liberar produto/serviço |
+| `pix.payment.paid` | PIX confirmado na CajuPay (ou liberado após antifraude) | Marcar pedido pago; liberar produto/serviço |
+| `pix.payment.under_review` | Hold antifraude | Marcar pedido em análise; não liberar produto ainda |
+| `pix.payment.antifraud_resolved` | Decisão do case | Atualizar conforme `outcome`; mostrar `admin_note` se cancelado |
 | `pix.payment.refunded` | Reembolso PIX confirmado (`devolvido`) | Marcar pedido reembolsado; revogar acesso |
 | `pix.payment.med_opened` | MED aberta pelo banco | Alertar seller; bloquear reembolso manual; exibir em `/disputas` |
 | `pix.payment.med_resolved` | MED encerrada | Atualizar UI conforme `outcome` |
@@ -1655,6 +1675,44 @@ Igual ao módulo 11:
 ```
 
 Correlacionar pelo `cajupay_payment_id` salvo ao `POST /api/payments/pix`.
+
+## `data.object` — antifraude (`pix.payment.under_review`)
+
+```json
+{
+  "gateway": "cajupay",
+  "cajupay_payment_id": "uuid-pagamento",
+  "pay_account_id": "uuid-conta",
+  "amount_cents": 150000,
+  "currency": "BRL",
+  "status": "under_review",
+  "product_ref": "pedido-123"
+}
+```
+
+## `data.object` — decisão antifraude (`pix.payment.antifraud_resolved`)
+
+```json
+{
+  "gateway": "cajupay",
+  "cajupay_payment_id": "uuid-pagamento",
+  "pay_account_id": "uuid-conta",
+  "antifraud_case_id": "uuid-case",
+  "amount_cents": 150000,
+  "currency": "BRL",
+  "status": "cancelled",
+  "outcome": "cancelled",
+  "admin_note": "Documentação insuficiente",
+  "product_ref": "pedido-123"
+}
+```
+
+| `outcome` | Interpretação |
+|-----------|---------------|
+| `released` | Liberado; pagamento `paid` (também chega `pix.payment.paid`) |
+| `cancelled` | Cancelado pela análise; pagamento `cancelled`; motivo em `admin_note` |
+
+Não confundir `outcome: cancelled` com webhook `pix.payment.refunded` (reembolso PIX ao pagador via API/provedor).
 
 ## `data.object` — reembolso (`pix.payment.refunded`)
 
@@ -1725,11 +1783,13 @@ Use `id` do envelope (UUID determinístico por evento lógico). O mesmo evento r
 
 | Operação | API (módulo) | Webhook |
 |----------|--------------|---------|
-| Criar cobrança PIX | 10 — POST /api/payments/pix | `pix.payment.paid` quando pago |
+| Criar cobrança PIX | 10 — POST /api/payments/pix | `pix.payment.paid` quando pago (ou `under_review` se hold) |
 | Pedir reembolso | 18 — POST pix-refund | `pix.payment.refunded` quando concluir |
 | Consultar reembolso | 18 — GET pix-refund | — |
 | Listar MED | 19 — GET /api/med | `med_opened` / `med_resolved` |
-| Enviar defesa | 19 — POST defense | — |
+| Enviar defesa MED | 19 — POST defense | — |
+| Listar antifraude | 25 — GET /api/antifraud/cases | `under_review` / `antifraud_resolved` |
+| Enviar provas antifraude | 25 — POST defense | — |
 
 Webhook + job de reconciliação (módulo 21) — não dependa só de polling na página do QR.
 
@@ -1745,10 +1805,15 @@ Não confundir com `pix.payment.refunded`.
 
 - [ ] Handler HMAC único para checkout + pix events
 - [ ] Tratar `pix.payment.paid` (marcar pedido pago)
+- [ ] Tratar `under_review` / `antifraud_resolved` se antifraude ativo
 - [ ] `pix.payment.*` cadastrados (ou wildcard)
 - [ ] Worker de entrega ativo
 - [ ] Reconciliação background (módulo 21) como fallback
-- [ ] Módulos 18 e 19 se pós-venda MED/reembolso
+- [ ] Módulos 18, 19 e 25 se pós-venda MED/reembolso/antifraude
+
+## Assinaturas e boleto
+
+Eventos `subscription.*` e `boleto.*` — módulos **26** e **27**. Mesmo HMAC outbound CajuPay.
 
 ---
 
@@ -1842,6 +1907,14 @@ GET https://api.cajupay.com.br/api/wallet/entries?kind=main&limit=50
 ```
 
 Escopo: `wallet.read`. Valores em centavos.
+
+Resposta de saldo (`kind=main`):
+
+| Campo | Significado |
+|-------|-------------|
+| `balance_cents` | Saldo disponível para saque |
+| `pending_release_cents` | PIX Automático ainda na janela de 4h (`settlement_hold`) |
+| `held_cents` | Hold antifraude (`risk_hold`) |
 
 ## Saques
 
@@ -2047,6 +2120,7 @@ Revise o código gerado contra esta lista antes de considerar a integração com
 | 17 | Reconciliar PIX só na tela do QR / só webhook | Job servidor: `GET /api/payments` a cada 1–2 min (módulo 21) |
 | 18 | Omitir `partner_checkout_url` em produção | Enviar URL HTTPS do checkout no site do parceiro (compliance) |
 | 19 | Omitir `consumer.phone` em PIX | Incluir telefone E.164 na criação (`consumer.phone` ou `payer_phone`) — Recovery/Acesso SMS |
+| 20 | Cobrança abaixo de R$ 2,00 | `amount_cents` ≥ 200 em toda criação via API (PIX, links, sessão SDK) |
 
 ## Checklist de produção — SDK embed
 
@@ -3080,6 +3154,20 @@ Correlacionar pelo `cajupay_payout_id` retornado em `POST /api/payouts`.
 6. Confirmar pagamento da entrada: webhook `pix_parcelado.installment.paid` (`sequence=1`) ou polling `GET /plans/{id}`.
 7. Parcelas futuras: webhooks `due_soon` / `overdue`; comprador paga via portal ou integrador regenera Pix com `POST .../installments/{id}/pix`.
 
+## Comunicações após pagamento (automáticas — não são API do integrador)
+
+Quando a CajuPay **liquida** o PIX de uma parcela (webhook PSP), a plataforma envia mensagens **sem** o parceiro chamar endpoint extra:
+
+| Momento | E-mail | SMS |
+|---------|--------|-----|
+| **Entrada (sequence=1) paga** | Boas-vindas Pix Parcelado → e-mail do comprador no customer-service | Link “Minhas Compras” (Integraflux via recovery-service) |
+| **Entrada ainda pendente** | Recovery (e-mail ~5 min) | Recovery (~30 min, 6 h, 24 h) — **cancelado** se pagar antes |
+| **Parcelas 2+** | Lembretes de vencimento | Lembretes (`parcelado-worker` + one-shots) |
+
+**O integrador só precisa** repassar `consumer.phone` / `payer_phone` na criação do plano ou no `POST .../public/{token}/pay`. Endpoints internos do parceiro (ex. “confirm order”) **não** disparam SMS/e-mail CajuPay.
+
+**Se pagou e não chegou boas-vindas:** verifique (lado CajuPay) customer-service, SMTP, recovery-service, Integraflux, logs `parcelado.welcome_*`. Se o webhook `pix_parcelado.installment.paid` chegou ao integrador, a liquidação ocorreu — falha de comunicação é infra plataforma, não payload do checkout.
+
 Salve sempre o `id` do plano na criação — planos com entrada pendente **não aparecem** em `GET /plans` (ver abaixo).
 
 ## Escopos por rota
@@ -3521,3 +3609,653 @@ Cada parcela também gera `pix.payment.paid` (`product_ref: pix_parcelado`) — 
 - Não prometer débito automático — cobranças são PIX manuais mensais.
 - Sempre exibir marca **cajuPay** no checkout (credibilidade nas cobranças futuras).
 - Não depender só de `GET /plans` para planos recém-criados — a entrada pode ainda estar pendente.
+
+---
+
+<!-- module: 25-antifraud-api -->
+
+
+# Antifraude PIX (consulta e defesa via API)
+
+## INSTRUÇÕES PARA O MODELO
+
+1. O case antifraude é aberto pela **cajuPay** (limiar automático ou operação interna) — o integrador **não cria** case via API.
+2. A API permite **listar**, **consultar** e **enviar provas/defesa** (`multipart/form-data`).
+3. Pagamento em análise fica com `status = under_review` (saldo retido / “a liberar”).
+4. Notifique o seller via webhook `pix.payment.under_review` / `pix.payment.antifraud_resolved` e/ou polling das rotas abaixo.
+5. Em **liberação**, também chega `pix.payment.paid` — trate ambos de forma idempotente.
+6. Em **cancelamento** (`outcome: cancelled`), o pagamento fica `cancelled` localmente; o reembolso PIX ao comprador é operacional (não é `pix.payment.refunded` automático).
+
+## Quando usar este módulo
+
+Gateway / ERP parceiro com área “Análise antifraude” para o lojista acompanhar holds e enviar provas.
+
+## Autenticação
+
+| Rota | Escopo |
+|------|--------|
+| `GET /api/antifraud/summary` | `payments.write` **ou** `wallet.read` |
+| `GET /api/antifraud/cases`, `GET .../cases/{id}`, `GET .../by-payment/{id}` | `payments.write` **ou** `wallet.read` |
+| `POST /api/antifraud/cases/{id}/defense` | `payments.write` |
+
+## GET /api/antifraud/summary — contadores
+
+```http
+GET https://api.cajupay.com.br/api/antifraud/summary
+X-API-Key: ...
+X-API-Secret: ...
+```
+
+Resposta:
+
+```json
+{
+  "open_count": 2,
+  "awaiting_defense_count": 1
+}
+```
+
+Use no dashboard do parceiro (badge de cases pendentes / sem provas).
+
+## GET /api/antifraud/cases — listar
+
+```http
+GET https://api.cajupay.com.br/api/antifraud/cases?status=open&limit=50
+```
+
+Query opcional: `status` = `open` | `released` | `refunded` (omitir = todos). `limit` padrão 50 (máx. 100).
+
+Resposta:
+
+```json
+{
+  "data": [
+    {
+      "id": "uuid-case",
+      "payment_id": "uuid-pagamento",
+      "amount_cents": 150000,
+      "currency": "BRL",
+      "status": "open",
+      "reason": "above_threshold",
+      "payment_status": "under_review",
+      "has_seller_defense": false,
+      "created_at": "2026-07-29T12:00:00Z",
+      "updated_at": "2026-07-29T12:00:00Z"
+    }
+  ]
+}
+```
+
+## GET /api/antifraud/cases/{id} — detalhe
+
+```json
+{
+  "id": "uuid-case",
+  "payment_id": "uuid-pagamento",
+  "amount_cents": 150000,
+  "currency": "BRL",
+  "status": "refunded",
+  "reason": "above_threshold",
+  "admin_note": "Documentação insuficiente para liberar",
+  "payment_status": "cancelled",
+  "product_ref": "pedido-123",
+  "payer_name": "Maria",
+  "has_seller_defense": true,
+  "seller_defense_text": "...",
+  "seller_defense_attachments": [],
+  "seller_defended_at": "2026-07-29T13:00:00Z",
+  "reviewed_at": "2026-07-29T15:00:00Z",
+  "created_at": "...",
+  "updated_at": "..."
+}
+```
+
+Erros: `404` + `{ "error": "not_found" }` se o case não pertence à conta.
+
+## GET /api/antifraud/by-payment/{payment_id}
+
+Mesmo payload do detalhe; útil quando o parceiro só tem o `payment_id` do webhook.
+
+## Atalho em GET /api/payments/{id}
+
+Campos opcionais no pagamento:
+
+```json
+{
+  "payment_id": "...",
+  "status": "cancelled",
+  "antifraud_status": "refunded",
+  "antifraud_admin_note": "Documentação insuficiente para liberar"
+}
+```
+
+## Status do case
+
+| `status` | UI sugerida |
+|----------|-------------|
+| `open` | Em análise; permitir enviar provas |
+| `released` | Liberado; pagamento `paid` |
+| `refunded` | Cancelado pela análise; mostrar `admin_note` |
+
+## POST /api/antifraud/cases/{id}/defense — enviar provas
+
+Apenas com `status = open` e sem defesa prévia.
+
+```http
+POST https://api.cajupay.com.br/api/antifraud/cases/{id}/defense
+Content-Type: multipart/form-data
+X-API-Key: ...
+X-API-Secret: ...
+
+text=Descricao da venda e contexto...
+attachments=@prova1.jpg
+attachments=@prova2.png
+```
+
+| Campo | Obrigatório | Limite |
+|-------|-------------|--------|
+| `text` | **Sim** | Mín. ~10 caracteres; máx. ~8000 |
+| `attachments` | **Sim** (pelo menos 1 imagem) | Máx. **10** arquivos; **8 MiB** cada |
+
+Tipos: imagens (JPEG, PNG, WEBP, GIF); PDF opcional.
+
+Resposta:
+
+```json
+{ "ok": true, "status": "defense_received" }
+```
+
+## Erros comuns (defesa)
+
+| `error` | HTTP |
+|---------|------|
+| `not_found` / `case_not_open` | 404 / 409 |
+| `defense_already_submitted` | 409 |
+| `defense_text_required` | 400 |
+| `defense_image_required` | 400 |
+| `defense_attachments_too_many` | 400 |
+| `defense_attachment_invalid_size` | 400 |
+| `defense_attachment_type_not_allowed` | 400 |
+| `storage_not_configured` | 503 |
+
+## Webhooks (ver módulo 12)
+
+| `type` | Quando |
+|--------|--------|
+| `pix.payment.under_review` | Entrou em análise |
+| `pix.payment.antifraud_resolved` | Decisão (`outcome`: `released` \| `cancelled`) |
+| `pix.payment.paid` | Também emitido quando `outcome = released` |
+
+`data.object` de `antifraud_resolved` inclui `cajupay_payment_id`, `antifraud_case_id`, `outcome`, `admin_note`, `status` do pagamento.
+
+## Fluxo na plataforma do parceiro
+
+```mermaid
+sequenceDiagram
+  participant CP as CajuPay
+  participant WH as Webhook
+  participant P as PlataformaParceiro
+
+  CP->>WH: pix.payment.under_review
+  WH->>P: Marcar pedido em analise
+  P->>CP: GET /api/antifraud/by-payment/id
+  P->>CP: POST /api/antifraud/cases/id/defense
+  CP->>WH: pix.payment.antifraud_resolved
+  alt outcome released
+    CP->>WH: pix.payment.paid
+    WH->>P: Liberar pedido
+  else outcome cancelled
+    WH->>P: Cancelar pedido e mostrar admin_note
+  end
+```
+
+## Exemplo curl (defesa)
+
+```bash
+curl -X POST "https://api.cajupay.com.br/api/antifraud/cases/CASE_UUID/defense" \
+  -H "X-API-Key: SUA_KEY" \
+  -H "X-API-Secret: SUA_SECRET" \
+  -F "text=Venda de curso digital; segue print de acesso." \
+  -F "attachments=@./prova1.jpg"
+```
+
+## Checklist
+
+- [ ] Área “Antifraude” no painel do parceiro
+- [ ] Webhooks `pix.payment.under_review` e `pix.payment.antifraud_resolved`
+- [ ] Tratar `pix.payment.paid` após liberação sem duplicar efeitos
+- [ ] Defesa só em cases `open` sem provas prévias
+- [ ] Exibir `admin_note` quando `outcome = cancelled`
+- [ ] Não confundir cancelamento antifraude com `pix.payment.refunded`
+
+---
+
+<!-- module: 25-antifraud-api -->
+
+
+# Antifraude PIX (consulta e defesa via API)
+
+## INSTRUÇÕES PARA O MODELO
+
+1. O case antifraude é aberto pela **cajuPay** (limiar automático ou operação interna) — o integrador **não cria** case via API.
+2. A API permite **listar**, **consultar** e **enviar provas/defesa** (`multipart/form-data`).
+3. Pagamento em análise fica com `status = under_review` (saldo retido / “a liberar”).
+4. Notifique o seller via webhook `pix.payment.under_review` / `pix.payment.antifraud_resolved` e/ou polling das rotas abaixo.
+5. Em **liberação**, também chega `pix.payment.paid` — trate ambos de forma idempotente.
+6. Em **cancelamento** (`outcome: cancelled`), o pagamento fica `cancelled` localmente; o reembolso PIX ao comprador é operacional (não é `pix.payment.refunded` automático).
+
+## Quando usar este módulo
+
+Gateway / ERP parceiro com área “Análise antifraude” para o lojista acompanhar holds e enviar provas.
+
+## Autenticação
+
+| Rota | Escopo |
+|------|--------|
+| `GET /api/antifraud/summary` | `payments.write` **ou** `wallet.read` |
+| `GET /api/antifraud/cases`, `GET .../cases/{id}`, `GET .../by-payment/{id}` | `payments.write` **ou** `wallet.read` |
+| `POST /api/antifraud/cases/{id}/defense` | `payments.write` |
+
+## GET /api/antifraud/summary — contadores
+
+```http
+GET https://api.cajupay.com.br/api/antifraud/summary
+X-API-Key: ...
+X-API-Secret: ...
+```
+
+Resposta:
+
+```json
+{
+  "open_count": 2,
+  "awaiting_defense_count": 1
+}
+```
+
+Use no dashboard do parceiro (badge de cases pendentes / sem provas).
+
+## GET /api/antifraud/cases — listar
+
+```http
+GET https://api.cajupay.com.br/api/antifraud/cases?status=open&limit=50
+```
+
+Query opcional: `status` = `open` | `released` | `refunded` (omitir = todos). `limit` padrão 50 (máx. 100).
+
+Resposta:
+
+```json
+{
+  "data": [
+    {
+      "id": "uuid-case",
+      "payment_id": "uuid-pagamento",
+      "amount_cents": 150000,
+      "currency": "BRL",
+      "status": "open",
+      "reason": "above_threshold",
+      "payment_status": "under_review",
+      "has_seller_defense": false,
+      "created_at": "2026-07-29T12:00:00Z",
+      "updated_at": "2026-07-29T12:00:00Z"
+    }
+  ]
+}
+```
+
+## GET /api/antifraud/cases/{id} — detalhe
+
+```json
+{
+  "id": "uuid-case",
+  "payment_id": "uuid-pagamento",
+  "amount_cents": 150000,
+  "currency": "BRL",
+  "status": "refunded",
+  "reason": "above_threshold",
+  "admin_note": "Documentação insuficiente para liberar",
+  "payment_status": "cancelled",
+  "product_ref": "pedido-123",
+  "payer_name": "Maria",
+  "has_seller_defense": true,
+  "seller_defense_text": "...",
+  "seller_defense_attachments": [],
+  "seller_defended_at": "2026-07-29T13:00:00Z",
+  "reviewed_at": "2026-07-29T15:00:00Z",
+  "created_at": "...",
+  "updated_at": "..."
+}
+```
+
+Erros: `404` + `{ "error": "not_found" }` se o case não pertence à conta.
+
+## GET /api/antifraud/by-payment/{payment_id}
+
+Mesmo payload do detalhe; útil quando o parceiro só tem o `payment_id` do webhook.
+
+## Atalho em GET /api/payments/{id}
+
+Campos opcionais no pagamento:
+
+```json
+{
+  "payment_id": "...",
+  "status": "cancelled",
+  "antifraud_status": "refunded",
+  "antifraud_admin_note": "Documentação insuficiente para liberar"
+}
+```
+
+## Status do case
+
+| `status` | UI sugerida |
+|----------|-------------|
+| `open` | Em análise; permitir enviar provas |
+| `released` | Liberado; pagamento `paid` |
+| `refunded` | Cancelado pela análise; mostrar `admin_note` |
+
+## POST /api/antifraud/cases/{id}/defense — enviar provas
+
+Apenas com `status = open` e sem defesa prévia.
+
+```http
+POST https://api.cajupay.com.br/api/antifraud/cases/{id}/defense
+Content-Type: multipart/form-data
+X-API-Key: ...
+X-API-Secret: ...
+
+text=Descricao da venda e contexto...
+attachments=@prova1.jpg
+attachments=@prova2.png
+```
+
+| Campo | Obrigatório | Limite |
+|-------|-------------|--------|
+| `text` | **Sim** | Mín. ~10 caracteres; máx. ~8000 |
+| `attachments` | **Sim** (pelo menos 1 imagem) | Máx. **10** arquivos; **8 MiB** cada |
+
+Tipos: imagens (JPEG, PNG, WEBP, GIF); PDF opcional.
+
+Resposta:
+
+```json
+{ "ok": true, "status": "defense_received" }
+```
+
+## Erros comuns (defesa)
+
+| `error` | HTTP |
+|---------|------|
+| `not_found` / `case_not_open` | 404 / 409 |
+| `defense_already_submitted` | 409 |
+| `defense_text_required` | 400 |
+| `defense_image_required` | 400 |
+| `defense_attachments_too_many` | 400 |
+| `defense_attachment_invalid_size` | 400 |
+| `defense_attachment_type_not_allowed` | 400 |
+| `storage_not_configured` | 503 |
+
+## Webhooks (ver módulo 12)
+
+| `type` | Quando |
+|--------|--------|
+| `pix.payment.under_review` | Entrou em análise |
+| `pix.payment.antifraud_resolved` | Decisão (`outcome`: `released` \| `cancelled`) |
+| `pix.payment.paid` | Também emitido quando `outcome = released` |
+
+`data.object` de `antifraud_resolved` inclui `cajupay_payment_id`, `antifraud_case_id`, `outcome`, `admin_note`, `status` do pagamento.
+
+## Fluxo na plataforma do parceiro
+
+```mermaid
+sequenceDiagram
+  participant CP as CajuPay
+  participant WH as Webhook
+  participant P as PlataformaParceiro
+
+  CP->>WH: pix.payment.under_review
+  WH->>P: Marcar pedido em analise
+  P->>CP: GET /api/antifraud/by-payment/id
+  P->>CP: POST /api/antifraud/cases/id/defense
+  CP->>WH: pix.payment.antifraud_resolved
+  alt outcome released
+    CP->>WH: pix.payment.paid
+    WH->>P: Liberar pedido
+  else outcome cancelled
+    WH->>P: Cancelar pedido e mostrar admin_note
+  end
+```
+
+## Exemplo curl (defesa)
+
+```bash
+curl -X POST "https://api.cajupay.com.br/api/antifraud/cases/CASE_UUID/defense" \
+  -H "X-API-Key: SUA_KEY" \
+  -H "X-API-Secret: SUA_SECRET" \
+  -F "text=Venda de curso digital; segue print de acesso." \
+  -F "attachments=@./prova1.jpg"
+```
+
+## Checklist
+
+- [ ] Área “Antifraude” no painel do parceiro
+- [ ] Webhooks `pix.payment.under_review` e `pix.payment.antifraud_resolved`
+- [ ] Tratar `pix.payment.paid` após liberação sem duplicar efeitos
+- [ ] Defesa só em cases `open` sem provas prévias
+- [ ] Exibir `admin_note` quando `outcome = cancelled`
+- [ ] Não confundir cancelamento antifraude com `pix.payment.refunded`
+
+---
+
+<!-- module: 26-subscriptions -->
+
+
+# Assinaturas (PIX Automático + boleto recorrente)
+
+Produto CajuPay de assinaturas. PIX à vista continua em `POST /api/payments/pix`.
+
+## Escopos
+
+| Operação | Escopo |
+|----------|--------|
+| Listar / detalhe / summary / cobranças | `subscriptions.read` |
+| Criar / cancelar / alterar valor / retry / refund | `subscriptions.write` |
+
+Novas API Keys já incluem esses escopos em `DefaultScopes`.
+
+## Endpoints
+
+Base: `https://api.cajupay.com.br`
+
+| Método | Rota | Notas |
+|--------|------|-------|
+| `GET` | `/api/subscriptions/summary` | Totais + MRR mensal estimado |
+| `POST` | `/api/subscriptions` | Header **`Idempotency-Key` obrigatório** |
+| `GET` | `/api/subscriptions` | Query: `status`, `method`, `q`, `limit`, `offset` |
+| `GET` | `/api/subscriptions/{id}` | |
+| `POST` | `/api/subscriptions/{id}/cancel` | Cancela na adquirente e localmente; cancela cobranças/payments pendentes |
+| `PATCH` | `/api/subscriptions/{id}` | Body `{ "value_cents": N }` |
+| `GET` | `/api/subscriptions/{id}/charges` | Parcelas / CobR (também tenta sync se webhook atrasou) |
+| `POST` | `/api/subscriptions/{id}/sync` | Consulta status na adquirente e liquida CobRs pagas (fallback sem webhook) |
+| `POST` | `/api/subscriptions/{id}/charges/{chargeID}/retry` | Retry CobR |
+| `POST` | `/api/subscriptions/{id}/charges/{chargeID}/refund` | Reembolso da parcela paga. Estorna ledger e marca payment `refunded`. |
+
+## Criar — PIX Automático
+
+Header obrigatório:
+
+```http
+Idempotency-Key: pedido-12345-pix-auto
+```
+
+Mesma chave + mesmo body → devolve a assinatura já criada (sem nova chamada à adquirente / sem consumir quota). Mesma chave + body diferente → `409 idempotency_key_reuse_mismatch`.
+
+```json
+{
+  "method": "pix_automatic",
+  "name": "Plano Pro",
+  "value_cents": 9900,
+  "frequency": "MONTHLY",
+  "journey": "PAYMENT_ON_APPROVAL",
+  "retry_policy": "THREE_RETRIES_7_DAYS",
+  "correlation_id": "pedido-12345",
+  "day_generate_charge": 10,
+  "day_due": 7,
+  "customer": {
+    "name": "Maria Silva",
+    "tax_id": "12345678909",
+    "email": "maria@exemplo.com",
+    "phone": "5511999999999",
+    "address": {
+      "zipcode": "01310100",
+      "street": "Av Paulista",
+      "number": "1000",
+      "neighborhood": "Bela Vista",
+      "city": "São Paulo",
+      "state": "SP",
+      "country": "BR"
+    }
+  }
+}
+```
+
+- Frequências PIX Automático: `WEEKLY`, `MONTHLY`, `QUARTERLY`, `SEMIANNUALLY`, `ANNUALLY` (sem `BIMONTHLY`).
+- Jornadas API: `ONLY_RECURRENCY` (J2), `PAYMENT_ON_APPROVAL` (J3, default).
+- Retries: `NON_PERMITED`, `THREE_RETRIES_7_DAYS`.
+- Endereço BR **obrigatório**.
+- `correlation_id` (opcional): id estável do pedido no seu sistema. Se omitido, a CajuPay gera um UUID. Esse valor volta nos webhooks como `correlation_id` e `billing_order_id`.
+
+### Contrato da resposta (autorização / 1ª cobrança)
+
+| Campo | Garantia |
+|-------|----------|
+| `id` / `subscription_id` | Sempre — UUID CajuPay |
+| `correlation_id` | Sempre |
+| `status` | Sempre (`pending_approval` até autorizar) |
+| `pix_emv` | QR / copia-e-cola para o checkout (quando a adquirente devolve) |
+| `pix_copy_paste` | Alias de `pix_emv` (mesmo valor) |
+
+Sem `pix_emv` utilizável na resposta → `502 missing_pix_authorization_payload` (a chave de idempotência fica liberada para retry). No checkout, use `pix_emv` / `pix_copy_paste`.
+
+Rate limit da adquirente: HTTP **429**, `error: "rate_limited"`, header `Retry-After` (segundos).
+
+## Criar — boleto recorrente
+
+```json
+{
+  "method": "boleto",
+  "value_cents": 15000,
+  "frequency": "MONTHLY",
+  "day_generate_charge": 5,
+  "day_due": 7,
+  "customer": { "name": "Empresa X", "tax_id": "12345678000199", "email": "fin@x.com" }
+}
+```
+
+`BIMONTHLY` permitido só em boleto recorrente. Também exige `Idempotency-Key`.
+
+## Webhooks outbound
+
+| Evento | Quando |
+|--------|--------|
+| `subscription.approved` | Pagador autorizou PIX Automático **ou** 1ª CobR paga curou adesão (`pending_approval` → `active`) |
+| `subscription.rejected` | Recusa / revogação |
+| `subscription.charge.created` | CobR / parcela criada |
+| `subscription.charge.paid` | Parcela paga (+ settlement ledger) |
+| `subscription.charge.failed` | Parcela rejeitada |
+| `subscription.charge.refunded` | Reembolso |
+
+Wildcard: `subscription.*`. Assinatura HMAC igual aos demais webhooks CajuPay (`X-CajuPay-Signature`).
+
+### `PAYMENT_ON_APPROVAL` — 1ª compra
+
+1. **`subscription.approved`** = mandato autorizado (status local `active`). **Não** implica sozinho que o dinheiro da 1ª parcela já liquidou no ledger — use `subscription.charge.paid` para o pagamento.
+2. **`subscription.charge.paid`** = parcela paga e liquidada. Na jornada `PAYMENT_ON_APPROVAL`, a 1ª CobR paga também dispara `subscription.approved` se a adesão ainda estava `pending_approval` (heal quando o webhook de aprovação falhou/atrasou).
+3. Ordem típica: `approved` → `charge.created` → `charge.paid`. Em heal: `charge.paid` e em seguida `approved`.
+4. Payload de charge inclui sempre `subscription_id`, e quando disponível: `correlation_id`, `billing_order_id` (= `correlation_id`), `customer_ref`, `metadata` com esses campos, e `cajupay_payment_id` quando houver payment.
+
+Evento paralelo `pix.payment.paid` (mesmo settlement) também pode trazer `subscription_id` / `correlation_id` quando `origin_type` for assinatura.
+
+**Retry:** se o endpoint do integrador responder HTTP 200, a CajuPay **não** reenvia mesmo se a lógica interna do cliente falhou. Trate 5xx/timeout para receber retry.
+
+## Antifraude e liberação de saldo
+
+Cobranças **PIX Automático** pagas:
+
+1. Liquidam no ledger imediatamente.
+2. O valor líquido fica em **saldo a liberar** (`settlement_hold:main`) por **4 horas**.
+3. Após o prazo, o saldo vai para `main` (disponível para saque).
+4. Em seguida aplica-se a política de antifraude PIX existente (pode mover para `risk_hold` / `under_review`).
+
+Boleto (avulso ou recorrente) **não** usa hold antifraude nem o hold de 4h na v1.
+
+`GET /api/wallet/balance?kind=main` inclui `pending_release_cents` (hold de 4h) e `held_cents` (antifraude).
+
+## Painel
+
+Seller: `/assinaturas` — listagem, detalhe, QR/EMV, sync, cancelar, reembolso de parcela.
+
+---
+
+<!-- module: 27-boleto -->
+
+
+# Boleto avulso
+
+Boleto bancário avulso via API CajuPay. Diferente do boleto em payment links de cartão (`allow_boleto` no card-service).
+
+## Escopos
+
+| Operação | Escopo |
+|----------|--------|
+| Criar / reembolsar | `payments.write` |
+| Listar / detalhe | `wallet.read` |
+
+## Endpoints
+
+| Método | Rota |
+|--------|------|
+| `POST` | `/api/payments/boleto` |
+| `GET` | `/api/payments/boleto` |
+| `GET` | `/api/payments/boleto/{id}` |
+| `POST` | `/api/payments/boleto/{id}/refund` |
+
+### Criar
+
+```http
+POST /api/payments/boleto
+X-API-Key: ...
+X-API-Secret: ...
+Idempotency-Key: boleto-pedido-123
+Content-Type: application/json
+```
+
+```json
+{
+  "value_cents": 35000,
+  "comment": "Pedido 123",
+  "customer": {
+    "name": "João",
+    "tax_id": "12345678909",
+    "email": "joao@exemplo.com",
+    "phone": "5511988887777"
+  }
+}
+```
+
+Resposta: `boleto_barcode`, `boleto_digitable`, `boleto_url` / `payment_link_url`, `br_code` (PIX dual quando disponível), `status` (`active`).
+
+## Webhooks
+
+| Evento | Quando |
+|--------|--------|
+| `boleto.paid` | Boleto pago (`OPENPIX:CHARGE_COMPLETED`) — credita ledger |
+| `boleto.settled` | Liquidação financeira (`BOLETO_SETTLED`) — informativo, sem segundo crédito |
+| `boleto.expired` | Expirado sem pagamento |
+
+Wildcard: `boleto.*`.
+
+## Assinatura com boleto
+
+Para cobrança recorrente em boleto use `POST /api/subscriptions` com `method: "boleto"` — ver módulo **26-subscriptions**.

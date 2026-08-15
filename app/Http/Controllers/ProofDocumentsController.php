@@ -6,6 +6,7 @@ use App\Models\Order;
 use App\Models\ProofDocument;
 use App\Services\ProofOfDeliveryService;
 use App\Services\ProofPdfRenderer;
+use App\Services\TeamAccessService;
 use Illuminate\Http\Response;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -22,6 +23,8 @@ class ProofDocumentsController extends Controller
 
     public function show(Request $request, Order $order): InertiaResponse
     {
+        $this->authorizeOrderAccess($request, $order);
+
         $order->loadMissing(['user', 'product', 'productOffer', 'subscriptionPlan', 'orderItems.product']);
 
         $doc = ProofDocument::query()
@@ -71,6 +74,8 @@ class ProofDocumentsController extends Controller
 
     public function generate(Request $request, Order $order): RedirectResponse
     {
+        $this->authorizeOrderAccess($request, $order);
+
         $generatedBy = $request->user();
         $this->proofService->issueForOrder($order, $generatedBy);
 
@@ -79,6 +84,8 @@ class ProofDocumentsController extends Controller
 
     public function pdf(Request $request, Order $order): Response
     {
+        $this->authorizeOrderAccess($request, $order);
+
         $order->loadMissing(['user', 'product', 'productOffer', 'subscriptionPlan', 'orderItems.product']);
 
         $doc = ProofDocument::query()
@@ -101,5 +108,24 @@ class ProofDocumentsController extends Controller
             'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
         ]);
     }
-}
 
+    /**
+     * Isolamento multi-tenant (+ produtos permitidos para usuários team).
+     */
+    private function authorizeOrderAccess(Request $request, Order $order): void
+    {
+        $user = $request->user();
+        $tenantId = $user?->tenant_id;
+        if (! $tenantId || (int) $order->tenant_id !== (int) $tenantId) {
+            abort(404);
+        }
+
+        if ($user->isTeam()) {
+            $allowed = app(TeamAccessService::class)->allowedProductIdsFor($user);
+            $productId = (string) ($order->product_id ?? '');
+            if ($productId === '' || ! in_array($productId, array_map('strval', $allowed ?: []), true)) {
+                abort(404);
+            }
+        }
+    }
+}

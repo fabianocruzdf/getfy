@@ -2,15 +2,20 @@
 
 namespace App\Providers;
 
+use App\Events\OrderCompleted;
 use App\Plugins\PluginApiRouteRegistrar;
 use App\Plugins\PluginCapabilityRegistry;
 use App\Plugins\PluginClassAutoloader;
+use App\Plugins\PluginHookBus;
 use App\Plugins\PluginMiddlewareRegistry;
+use App\Plugins\PluginOrderContext;
 use App\Plugins\PluginPublicRouteRegistrar;
 use App\Plugins\PluginRegistry;
 use App\Plugins\ThemeEngine;
+use App\Support\PluginRequirements;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 
@@ -43,6 +48,15 @@ class PluginServiceProvider extends ServiceProvider
         }
 
         ThemeEngine::registerViewNamespaces();
+
+        Event::listen(OrderCompleted::class, function (OrderCompleted $event): void {
+            PluginHookBus::doAction('order.completed', $event->order);
+            try {
+                PluginHookBus::doAction('order.completed.context', PluginOrderContext::fromOrder($event->order));
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        });
     }
 
     /**
@@ -80,6 +94,17 @@ class PluginServiceProvider extends ServiceProvider
 
     private function loadPluginBootstrap(array $plugin): void
     {
+        $manifest = PluginRegistry::readManifest((string) ($plugin['path'] ?? '')) ?? $plugin;
+        $reqErrors = PluginRequirements::validate(is_array($manifest) ? $manifest : []);
+        if ($reqErrors !== []) {
+            Log::warning('Plugin bootstrap bloqueado por requires incompatível', [
+                'slug' => $plugin['slug'] ?? null,
+                'errors' => $reqErrors,
+            ]);
+
+            return;
+        }
+
         $bootstrap = $plugin['path'].DIRECTORY_SEPARATOR.'bootstrap.php';
         if (! is_file($bootstrap)) {
             return;

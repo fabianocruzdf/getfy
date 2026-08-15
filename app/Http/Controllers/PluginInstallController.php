@@ -259,6 +259,20 @@ class PluginInstallController extends Controller
         }
         PluginRegistry::register($pluginSlug);
         PluginClassAutoloader::refreshPrefixes();
+
+        $purchaseToken = request()->input('purchase_token');
+        if (is_string($purchaseToken) && trim($purchaseToken) !== '') {
+            try {
+                app(\App\PluginSdk\PluginLicenseService::class)->storePurchaseToken(
+                    $pluginSlug,
+                    trim($purchaseToken),
+                    is_string(request()->input('checksum')) ? request()->input('checksum') : null
+                );
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
+
         $migrationsPath = $plugin['migrations'] ?? null;
         if (is_string($migrationsPath) && $migrationsPath !== '') {
             $fullPath = $plugin['path'].DIRECTORY_SEPARATOR.str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $migrationsPath);
@@ -363,6 +377,38 @@ class PluginInstallController extends Controller
         }
 
         return null;
+    }
+
+    /**
+     * Atualiza um plugin já instalado (backup → reinstall via ZIP/loja).
+     */
+    public function update(Request $request, string $slug): RedirectResponse
+    {
+        if (! preg_match('/^[a-z0-9\-]+$/i', $slug)) {
+            return $this->pluginsIndexRedirect(['error' => 'Slug inválido.']);
+        }
+
+        $dir = PluginRegistry::resolvePluginDirectory($slug);
+        if ($dir === null || ! is_dir($dir)) {
+            return $this->pluginsIndexRedirect(['error' => 'Plugin não instalado.']);
+        }
+
+        $backupRoot = storage_path('app'.DIRECTORY_SEPARATOR.'plugin-backups');
+        if (! is_dir($backupRoot)) {
+            File::makeDirectory($backupRoot, 0755, true);
+        }
+        $backupPath = $backupRoot.DIRECTORY_SEPARATOR.$slug.'_'.date('YmdHis');
+        try {
+            File::copyDirectory($dir, $backupPath);
+        } catch (\Throwable $e) {
+            report($e);
+
+            return $this->pluginsIndexRedirect(['error' => 'Não foi possível criar backup antes do update.']);
+        }
+
+        $response = $this->__invoke($request, $slug);
+
+        return $response->with('info', 'Backup pré-update: '.basename($backupPath));
     }
 
     /**

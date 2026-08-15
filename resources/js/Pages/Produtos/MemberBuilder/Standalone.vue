@@ -21,6 +21,7 @@ import {
     Trash2,
     ChevronDown,
     ChevronRight,
+    ChevronUp,
     ExternalLink,
     X,
     FileVideo,
@@ -69,11 +70,9 @@ const csrfToken = () => document.querySelector('meta[name="csrf-token"]')?.conte
 
 const activeTab = ref('aparencia');
 const processing = ref(false);
-const heroDesktopUploading = ref(false);
-const heroDesktopFileInput = ref(null);
+const heroSlideUploading = ref({});
+const heroSlideFileInputs = ref({});
 const certBgFileInput = ref(null);
-const heroMobileUploading = ref(false);
-const heroMobileFileInput = ref(null);
 const headerLogoUploading = ref(false);
 const headerLogoFileInput = ref(null);
 const loginLogoUploading = ref(false);
@@ -133,9 +132,70 @@ const memberAreaFullLink = computed(() => {
     return props.produto.member_area_url || `${base}/m/${props.produto.checkout_slug}`;
 });
 
+function newHeroSlideId() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+    return `slide-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeHeroConfig(heroInput = {}) {
+    const hero = {
+        title: '',
+        subtitle: '',
+        image_url: '',
+        image_url_desktop: '',
+        image_url_mobile: '',
+        overlay: true,
+        overlay_opacity: 50,
+        autoplay: true,
+        autoplay_interval: 5,
+        slides: [],
+        ...heroInput,
+    };
+    let slides = Array.isArray(hero.slides) ? [...hero.slides] : [];
+    if (!slides.length && (hero.image_url_desktop || hero.image_url_mobile || hero.image_url)) {
+        slides = [{
+            id: newHeroSlideId(),
+            image_url_desktop: hero.image_url_desktop || hero.image_url || '',
+            image_url_mobile: hero.image_url_mobile || '',
+            title: hero.title || '',
+            subtitle: hero.subtitle || '',
+        }];
+    }
+    hero.slides = slides.map((s) => ({
+        id: s?.id || newHeroSlideId(),
+        image_url_desktop: s?.image_url_desktop || s?.image_url || '',
+        image_url_mobile: s?.image_url_mobile || '',
+        title: s?.title || '',
+        subtitle: s?.subtitle || '',
+    }));
+    if (hero.autoplay === undefined || hero.autoplay === null) hero.autoplay = true;
+    const interval = Number(hero.autoplay_interval ?? 5);
+    hero.autoplay_interval = Math.max(2, Math.min(30, Number.isFinite(interval) && interval > 0 ? interval : 5));
+    return hero;
+}
+
+function syncHeroLegacyFields() {
+    const hero = configForm.member_area_config.hero;
+    if (!hero) return;
+    const first = Array.isArray(hero.slides) ? hero.slides[0] : null;
+    if (first) {
+        hero.image_url_desktop = first.image_url_desktop || '';
+        hero.image_url_mobile = first.image_url_mobile || '';
+        hero.image_url = first.image_url_desktop || first.image_url_mobile || '';
+        if (!hero.title && first.title) hero.title = first.title;
+        if (!hero.subtitle && first.subtitle) hero.subtitle = first.subtitle;
+    } else {
+        hero.image_url_desktop = '';
+        hero.image_url_mobile = '';
+        hero.image_url = '';
+    }
+}
+
 const defaultConfig = () => ({
     theme: { primary: '#0ea5e9', background: '#18181b', text: '#f8fafc', sidebar_bg: '#27272a', ...props.produto.member_area_config?.theme },
-    hero: { title: '', subtitle: '', image_url: '', image_url_desktop: '', image_url_mobile: '', overlay: true, overlay_opacity: 50, ...props.produto.member_area_config?.hero },
+    hero: normalizeHeroConfig({ title: '', subtitle: '', image_url: '', image_url_desktop: '', image_url_mobile: '', overlay: true, overlay_opacity: 50, slides: [], autoplay: true, autoplay_interval: 5, ...props.produto.member_area_config?.hero }),
     header: { logo_url: '', ...props.produto.member_area_config?.header },
     logos: props.produto.member_area_config?.logos ?? {},
     sidebar: { collapsible: false, items: [], ...props.produto.member_area_config?.sidebar },
@@ -936,9 +996,11 @@ const editingModuleShowTitleOnCover = ref(true);
 const editingModuleRelatedProductId = ref(null);
 const editingModuleAccessType = ref('paid');
 const editingModuleExternalUrl = ref('');
-const editingModuleReleaseMode = ref('none'); // none | days | date
+const editingModuleReleaseMode = ref('none'); // none | days | date | progress | modules
 const editingModuleReleaseAfterDays = ref('');
 const editingModuleReleaseAtDate = ref('');
+const editingModuleReleaseProgressPercent = ref('');
+const editingModuleReleaseRequiredModuleIds = ref([]);
 const editingModuleAccessDurationDays = ref('');
 const editingModuleRequiresPreviousModules = ref(false);
 const editingModuleReleaseDependencies = ref([]);
@@ -962,9 +1024,11 @@ const moduleModalFileInputRef = ref(null);
 const moduleModalRelatedProductId = ref(null);
 const moduleModalAccessType = ref('paid');
 const moduleModalExternalUrl = ref('');
-const moduleModalReleaseMode = ref('none'); // none | days | date
+const moduleModalReleaseMode = ref('none'); // none | days | date | progress | modules
 const moduleModalReleaseAfterDays = ref('');
 const moduleModalReleaseAtDate = ref('');
+const moduleModalReleaseProgressPercent = ref('');
+const moduleModalReleaseRequiredModuleIds = ref([]);
 const moduleModalAccessDurationDays = ref('');
 const moduleModalRequiresPreviousModules = ref(false);
 const moduleModalReleaseDependencies = ref([]);
@@ -1045,6 +1109,8 @@ function openModuleEdit(mod) {
         }))
         : [];
     editingModuleRequiresPreviousModules.value = editingModuleReleaseDependencies.value.length > 0;
+    editingModuleReleaseProgressPercent.value = '';
+    editingModuleReleaseRequiredModuleIds.value = [];
     if (mod.release_at_date) {
         editingModuleReleaseMode.value = 'date';
         editingModuleReleaseAtDate.value = mod.release_at_date;
@@ -1052,6 +1118,16 @@ function openModuleEdit(mod) {
     } else if (mod.release_after_days) {
         editingModuleReleaseMode.value = 'days';
         editingModuleReleaseAfterDays.value = String(mod.release_after_days);
+        editingModuleReleaseAtDate.value = '';
+    } else if (mod.release_progress_percent) {
+        editingModuleReleaseMode.value = 'progress';
+        editingModuleReleaseProgressPercent.value = String(mod.release_progress_percent);
+        editingModuleReleaseAfterDays.value = '';
+        editingModuleReleaseAtDate.value = '';
+    } else if (Array.isArray(mod.release_required_module_ids) && mod.release_required_module_ids.length) {
+        editingModuleReleaseMode.value = 'modules';
+        editingModuleReleaseRequiredModuleIds.value = mod.release_required_module_ids.map(Number);
+        editingModuleReleaseAfterDays.value = '';
         editingModuleReleaseAtDate.value = '';
     } else {
         editingModuleReleaseMode.value = 'none';
@@ -1076,12 +1152,35 @@ async function saveModuleTitle() {
             const days = parseInt(editingModuleReleaseAfterDays.value, 10);
             payload.release_after_days = Number.isFinite(days) && days > 0 ? days : null;
             payload.release_at_date = null;
+            payload.release_progress_percent = null;
+            payload.release_required_module_ids = [];
         } else if (editingModuleReleaseMode.value === 'date') {
             payload.release_at_date = editingModuleReleaseAtDate.value?.trim() || null;
             payload.release_after_days = null;
+            payload.release_progress_percent = null;
+            payload.release_required_module_ids = [];
+        } else if (editingModuleReleaseMode.value === 'progress') {
+            const pct = parseInt(editingModuleReleaseProgressPercent.value, 10);
+            payload.release_progress_percent = Number.isFinite(pct) && pct >= 1 && pct <= 100 ? pct : null;
+            payload.release_after_days = null;
+            payload.release_at_date = null;
+            payload.release_required_module_ids = [];
+        } else if (editingModuleReleaseMode.value === 'modules') {
+            payload.release_required_module_ids = (editingModuleReleaseRequiredModuleIds.value || [])
+                .map((x) => Number(x))
+                .filter((n) => Number.isFinite(n) && n > 0);
+            payload.release_after_days = null;
+            payload.release_at_date = null;
+            payload.release_progress_percent = null;
+            if (!payload.release_required_module_ids.length) {
+                window.alert('Selecione ao menos um módulo pré-requisito.');
+                return;
+            }
         } else {
             payload.release_after_days = null;
             payload.release_at_date = null;
+            payload.release_progress_percent = null;
+            payload.release_required_module_ids = [];
         }
         if (editingModuleRequiresPreviousModules.value
             && editingModuleReleaseDependencies.value.length === 0) {
@@ -1104,7 +1203,14 @@ async function saveModuleTitle() {
         await axios.put(`${base.value}/modules/${id}`, payload, { headers: headers() });
         cancelEdit();
         reload();
-    } catch (_) {
+    } catch (err) {
+        const msg =
+            err?.response?.data?.message
+            || err?.response?.data?.errors?.release_required_module_ids?.[0]
+            || err?.response?.data?.errors?.release_dependencies?.[0]
+            || err?.message
+            || 'Não foi possível salvar o módulo.';
+        window.alert(msg);
     } finally {
         modulosModuleFormSaving.value = false;
     }
@@ -1240,7 +1346,11 @@ function handleModulesTabEditSection(section) {
 async function saveConfig() {
     processing.value = true;
     try {
+        syncHeroLegacyFields();
         const cleanedConfig = JSON.parse(JSON.stringify(configForm.member_area_config));
+        if (cleanedConfig.hero?.slides) {
+            cleanedConfig.hero.slides = cleanedConfig.hero.slides.map(({ _index, ...slide }) => slide);
+        }
         if (cleanedConfig.gamification && Array.isArray(cleanedConfig.gamification.achievements)) {
             cleanedConfig.gamification.achievements.forEach((a) => { delete a._editing; });
         }
@@ -1295,41 +1405,74 @@ async function doUpload(file, setUrl) {
     }
 }
 
-async function onHeroDesktopChange(event) {
-    const file = event.target?.files?.[0];
-    if (!file || !file.type.startsWith('image/')) return;
-    heroDesktopUploading.value = true;
-    try {
-        await doUpload(file, (url) => { configForm.member_area_config.hero.image_url_desktop = url; });
-    } catch (e) {
-        alert(memberBuilderImageUploadError(e, 'imagem'));
-    } finally {
-        heroDesktopUploading.value = false;
-        if (heroDesktopFileInput.value) heroDesktopFileInput.value.value = '';
+function ensureHeroSlidesArray() {
+    if (!configForm.member_area_config.hero) {
+        configForm.member_area_config.hero = normalizeHeroConfig();
     }
+    if (!Array.isArray(configForm.member_area_config.hero.slides)) {
+        configForm.member_area_config.hero.slides = [];
+    }
+    return configForm.member_area_config.hero.slides;
 }
 
-async function onHeroMobileChange(event) {
-    const file = event.target?.files?.[0];
-    if (!file || !file.type.startsWith('image/')) return;
-    heroMobileUploading.value = true;
-    try {
-        await doUpload(file, (url) => { configForm.member_area_config.hero.image_url_mobile = url; });
-    } catch (e) {
-        alert(memberBuilderImageUploadError(e, 'imagem'));
-    } finally {
-        heroMobileUploading.value = false;
-        if (heroMobileFileInput.value) heroMobileFileInput.value.value = '';
-    }
+function addHeroSlide() {
+    ensureHeroSlidesArray().push({
+        id: newHeroSlideId(),
+        image_url_desktop: '',
+        image_url_mobile: '',
+        title: '',
+        subtitle: '',
+    });
 }
 
-function removeHeroDesktop() {
-    configForm.member_area_config.hero.image_url_desktop = '';
+function removeHeroSlide(index) {
+    const slides = ensureHeroSlidesArray();
+    if (index < 0 || index >= slides.length) return;
+    slides.splice(index, 1);
+    syncHeroLegacyFields();
     saveConfig();
 }
 
-function removeHeroMobile() {
-    configForm.member_area_config.hero.image_url_mobile = '';
+function moveHeroSlide(index, direction) {
+    const slides = ensureHeroSlidesArray();
+    const target = index + direction;
+    if (target < 0 || target >= slides.length) return;
+    const [item] = slides.splice(index, 1);
+    slides.splice(target, 0, item);
+}
+
+function setHeroSlideFileInput(slideId, el) {
+    if (el) heroSlideFileInputs.value[slideId] = el;
+    else delete heroSlideFileInputs.value[slideId];
+}
+
+async function onHeroSlideImageChange(event, index, field) {
+    const file = event.target?.files?.[0];
+    if (!file || !file.type.startsWith('image/')) return;
+    const slides = ensureHeroSlidesArray();
+    const slide = slides[index];
+    if (!slide) return;
+    const key = `${slide.id}:${field}`;
+    heroSlideUploading.value = { ...heroSlideUploading.value, [key]: true };
+    try {
+        await doUpload(file, (url) => {
+            slide[field] = url;
+            syncHeroLegacyFields();
+        });
+    } catch (e) {
+        alert(memberBuilderImageUploadError(e, 'imagem'));
+    } finally {
+        heroSlideUploading.value = { ...heroSlideUploading.value, [key]: false };
+        if (event.target) event.target.value = '';
+    }
+}
+
+function removeHeroSlideImage(index, field) {
+    const slides = ensureHeroSlidesArray();
+    const slide = slides[index];
+    if (!slide) return;
+    slide[field] = '';
+    syncHeroLegacyFields();
     saveConfig();
 }
 
@@ -1616,6 +1759,8 @@ function openModuleModal(sectionId) {
     moduleModalReleaseMode.value = 'none';
     moduleModalReleaseAfterDays.value = '';
     moduleModalReleaseAtDate.value = '';
+    moduleModalReleaseProgressPercent.value = '';
+    moduleModalReleaseRequiredModuleIds.value = [];
     moduleModalAccessDurationDays.value = '';
     moduleModalRequiresPreviousModules.value = false;
     moduleModalReleaseDependencies.value = [];
@@ -1669,12 +1814,29 @@ async function confirmNewModule() {
                 const days = parseInt(moduleModalReleaseAfterDays.value, 10);
                 payload.release_after_days = Number.isFinite(days) && days > 0 ? days : null;
                 payload.release_at_date = null;
+                payload.release_progress_percent = null;
+                payload.release_required_module_ids = [];
             } else if (moduleModalReleaseMode.value === 'date') {
                 payload.release_at_date = moduleModalReleaseAtDate.value?.trim() || null;
                 payload.release_after_days = null;
+                payload.release_progress_percent = null;
+                payload.release_required_module_ids = [];
+            } else if (moduleModalReleaseMode.value === 'progress') {
+                const pct = parseInt(moduleModalReleaseProgressPercent.value, 10);
+                payload.release_progress_percent = Number.isFinite(pct) && pct >= 1 && pct <= 100 ? pct : null;
+                payload.release_after_days = null;
+                payload.release_at_date = null;
+                payload.release_required_module_ids = [];
+            } else if (moduleModalReleaseMode.value === 'modules') {
+                payload.release_required_module_ids = (moduleModalReleaseRequiredModuleIds.value || []).map(Number);
+                payload.release_after_days = null;
+                payload.release_at_date = null;
+                payload.release_progress_percent = null;
             } else {
                 payload.release_after_days = null;
                 payload.release_at_date = null;
+                payload.release_progress_percent = null;
+                payload.release_required_module_ids = [];
             }
             payload.release_dependencies = moduleModalRequiresPreviousModules.value
                 ? moduleModalReleaseDependencies.value
@@ -2257,76 +2419,169 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                 <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Fundo</label>
                                 <input v-model="configForm.member_area_config.theme.background" type="color" class="h-9 w-full cursor-pointer rounded-lg border dark:border-zinc-600" />
                             </div>
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Banner do hero — Desktop</label>
-                                <input
-                                    ref="heroDesktopFileInput"
-                                    type="file"
-                                    accept="image/*"
-                                    class="hidden"
-                                    @change="onHeroDesktopChange"
-                                />
-                                <div class="flex flex-col gap-2">
-                                    <div v-if="configForm.member_area_config.hero.image_url_desktop" class="relative">
-                                        <img :src="configForm.member_area_config.hero.image_url_desktop" alt="Hero desktop" class="h-24 w-full rounded-lg object-cover" />
-                                        <div class="mt-1 flex gap-2">
-                                            <Button type="button" size="sm" variant="outline" :disabled="heroDesktopUploading" @click="heroDesktopFileInput?.click()">
-                                                Trocar
-                                            </Button>
-                                            <Button type="button" size="sm" variant="ghost" class="text-red-600" :disabled="heroDesktopUploading" @click="removeHeroDesktop">
-                                                Remover
-                                            </Button>
+                            <div class="space-y-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+                                <div class="flex items-center justify-between gap-2">
+                                    <div>
+                                        <label class="block text-xs font-medium text-zinc-600 dark:text-zinc-400">Banner do hero (carrossel)</label>
+                                        <p class="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">Adicione uma ou mais imagens. Com 2+, vira carrossel com troca automática.</p>
+                                    </div>
+                                    <Button type="button" size="sm" variant="outline" @click="addHeroSlide">
+                                        <Plus class="mr-1 h-3.5 w-3.5" /> Slide
+                                    </Button>
+                                </div>
+
+                                <div
+                                    v-if="!(configForm.member_area_config.hero.slides?.length)"
+                                    class="rounded-lg border border-dashed border-zinc-300 px-3 py-6 text-center text-xs text-zinc-500 dark:border-zinc-600 dark:text-zinc-400"
+                                >
+                                    Nenhum slide ainda. Clique em “Slide” para enviar a primeira imagem.
+                                </div>
+
+                                <div
+                                    v-for="(slide, index) in configForm.member_area_config.hero.slides"
+                                    :key="slide.id || index"
+                                    class="space-y-3 rounded-lg border border-zinc-200 bg-zinc-50/70 p-3 dark:border-zinc-700 dark:bg-zinc-900/40"
+                                >
+                                    <div class="flex items-center justify-between gap-2">
+                                        <span class="text-xs font-semibold uppercase tracking-wide text-zinc-500">Slide {{ index + 1 }}</span>
+                                        <div class="flex items-center gap-1">
+                                            <button
+                                                type="button"
+                                                class="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-200 disabled:opacity-40 dark:hover:bg-zinc-800"
+                                                title="Mover para cima"
+                                                :disabled="index === 0"
+                                                @click="moveHeroSlide(index, -1)"
+                                            >
+                                                <ChevronUp class="h-4 w-4" />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                class="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-200 disabled:opacity-40 dark:hover:bg-zinc-800"
+                                                title="Mover para baixo"
+                                                :disabled="index === configForm.member_area_config.hero.slides.length - 1"
+                                                @click="moveHeroSlide(index, 1)"
+                                            >
+                                                <ChevronDown class="h-4 w-4" />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                class="rounded-lg p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                                                title="Remover slide"
+                                                @click="removeHeroSlide(index)"
+                                            >
+                                                <Trash2 class="h-4 w-4" />
+                                            </button>
                                         </div>
                                     </div>
-                                    <template v-else>
-                                        <Button type="button" variant="outline" size="sm" :disabled="heroDesktopUploading" @click="heroDesktopFileInput?.click()">
-                                            {{ heroDesktopUploading ? 'Enviando…' : 'Enviar banner desktop' }}
-                                        </Button>
-                                    </template>
-                                </div>
-                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Tamanho ideal: 1920×600 px (banner horizontal). Usado em telas maiores. Máx. {{ uploadLimits.image_max_mb }} MB.</p>
-                            </div>
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Banner do hero — Mobile</label>
-                                <input
-                                    ref="heroMobileFileInput"
-                                    type="file"
-                                    accept="image/*"
-                                    class="hidden"
-                                    @change="onHeroMobileChange"
-                                />
-                                <div class="flex flex-col gap-2">
-                                    <div v-if="configForm.member_area_config.hero.image_url_mobile" class="relative">
-                                        <img :src="configForm.member_area_config.hero.image_url_mobile" alt="Hero mobile" class="h-24 w-full rounded-lg object-cover" />
-                                        <div class="mt-1 flex gap-2">
-                                            <Button type="button" size="sm" variant="outline" :disabled="heroMobileUploading" @click="heroMobileFileInput?.click()">
-                                                Trocar
-                                            </Button>
-                                            <Button type="button" size="sm" variant="ghost" class="text-red-600" :disabled="heroMobileUploading" @click="removeHeroMobile">
-                                                Remover
-                                            </Button>
+
+                                    <div>
+                                        <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Imagem desktop</label>
+                                        <input
+                                            :ref="(el) => setHeroSlideFileInput(`${slide.id}:image_url_desktop`, el)"
+                                            type="file"
+                                            accept="image/*"
+                                            class="hidden"
+                                            @change="onHeroSlideImageChange($event, index, 'image_url_desktop')"
+                                        />
+                                        <div v-if="slide.image_url_desktop" class="space-y-1">
+                                            <img :src="slide.image_url_desktop" alt="" class="h-24 w-full rounded-lg object-cover" />
+                                            <div class="flex gap-2">
+                                                <Button type="button" size="sm" variant="outline" :disabled="!!heroSlideUploading[`${slide.id}:image_url_desktop`]" @click="heroSlideFileInputs[`${slide.id}:image_url_desktop`]?.click()">
+                                                    Trocar
+                                                </Button>
+                                                <Button type="button" size="sm" variant="ghost" class="text-red-600" @click="removeHeroSlideImage(index, 'image_url_desktop')">
+                                                    Remover
+                                                </Button>
+                                            </div>
                                         </div>
-                                    </div>
-                                    <template v-else>
-                                        <Button type="button" variant="outline" size="sm" :disabled="heroMobileUploading" @click="heroMobileFileInput?.click()">
-                                            {{ heroMobileUploading ? 'Enviando…' : 'Enviar banner mobile' }}
+                                        <Button
+                                            v-else
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            :disabled="!!heroSlideUploading[`${slide.id}:image_url_desktop`]"
+                                            @click="heroSlideFileInputs[`${slide.id}:image_url_desktop`]?.click()"
+                                        >
+                                            {{ heroSlideUploading[`${slide.id}:image_url_desktop`] ? 'Enviando…' : 'Enviar desktop (1920×600)' }}
                                         </Button>
-                                    </template>
+                                    </div>
+
+                                    <div>
+                                        <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Imagem mobile (opcional)</label>
+                                        <input
+                                            :ref="(el) => setHeroSlideFileInput(`${slide.id}:image_url_mobile`, el)"
+                                            type="file"
+                                            accept="image/*"
+                                            class="hidden"
+                                            @change="onHeroSlideImageChange($event, index, 'image_url_mobile')"
+                                        />
+                                        <div v-if="slide.image_url_mobile" class="space-y-1">
+                                            <img :src="slide.image_url_mobile" alt="" class="h-24 w-full rounded-lg object-cover" />
+                                            <div class="flex gap-2">
+                                                <Button type="button" size="sm" variant="outline" :disabled="!!heroSlideUploading[`${slide.id}:image_url_mobile`]" @click="heroSlideFileInputs[`${slide.id}:image_url_mobile`]?.click()">
+                                                    Trocar
+                                                </Button>
+                                                <Button type="button" size="sm" variant="ghost" class="text-red-600" @click="removeHeroSlideImage(index, 'image_url_mobile')">
+                                                    Remover
+                                                </Button>
+                                            </div>
+                                        </div>
+                                        <Button
+                                            v-else
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            :disabled="!!heroSlideUploading[`${slide.id}:image_url_mobile`]"
+                                            @click="heroSlideFileInputs[`${slide.id}:image_url_mobile`]?.click()"
+                                        >
+                                            {{ heroSlideUploading[`${slide.id}:image_url_mobile`] ? 'Enviando…' : 'Enviar mobile (800×900)' }}
+                                        </Button>
+                                        <p class="mt-1 text-xs text-zinc-500">Se vazio, usa a imagem desktop neste slide.</p>
+                                    </div>
+
+                                    <div>
+                                        <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Título do slide</label>
+                                        <input v-model="slide.title" type="text" :class="inputClass" placeholder="Opcional (usa o título geral se vazio)" />
+                                    </div>
+                                    <div>
+                                        <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Subtítulo do slide</label>
+                                        <input v-model="slide.subtitle" type="text" :class="inputClass" placeholder="Opcional" />
+                                    </div>
                                 </div>
-                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Tamanho ideal: 800×600 px ou 800×900 px (vertical). Usado em celulares. Se não enviar, usa o banner desktop. Máx. {{ uploadLimits.image_max_mb }} MB.</p>
+
+                                <p class="text-xs text-zinc-500 dark:text-zinc-400">Máx. {{ uploadLimits.image_max_mb }} MB por imagem.</p>
+                            </div>
+
+                            <div>
+                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Título geral do hero</label>
+                                <input v-model="configForm.member_area_config.hero.title" type="text" :class="inputClass" placeholder="Usado quando o slide não tem título" />
                             </div>
                             <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Título do hero</label>
-                                <input v-model="configForm.member_area_config.hero.title" type="text" :class="inputClass" placeholder="Título" />
-                            </div>
-                            <div>
-                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Subtítulo</label>
+                                <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Subtítulo geral</label>
                                 <input v-model="configForm.member_area_config.hero.subtitle" type="text" :class="inputClass" placeholder="Subtítulo" />
                             </div>
                             <div class="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
                                 <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Intensidade do overlay (0-100%)</label>
                                 <input v-model.number="configForm.member_area_config.hero.overlay_opacity" type="range" min="0" max="100" class="w-full" />
                                 <span class="text-xs text-zinc-500">{{ Math.round((configForm.member_area_config.hero.overlay_opacity ?? 50)) }}%</span>
+                            </div>
+                            <div class="space-y-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+                                <Toggle
+                                    :model-value="configForm.member_area_config.hero.autoplay !== false"
+                                    label="Play automático do carrossel"
+                                    @update:model-value="(v) => { configForm.member_area_config.hero.autoplay = v; }"
+                                />
+                                <div v-if="configForm.member_area_config.hero.autoplay !== false">
+                                    <label class="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">Intervalo (segundos)</label>
+                                    <input
+                                        v-model.number="configForm.member_area_config.hero.autoplay_interval"
+                                        type="number"
+                                        min="2"
+                                        max="30"
+                                        :class="inputClass"
+                                    />
+                                    <p class="mt-1 text-xs text-zinc-500">Entre 2 e 30 segundos. Pausa ao passar o mouse.</p>
+                                </div>
                             </div>
                         </div>
                         <Button type="button" class="mt-4" @click="saveConfig" :disabled="processing">Salvar</Button>
@@ -2523,6 +2778,8 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                             :editing-module-release-mode="editingModuleReleaseMode"
                             :editing-module-release-after-days="editingModuleReleaseAfterDays"
                             :editing-module-release-at-date="editingModuleReleaseAtDate"
+                            :editing-module-release-progress-percent="editingModuleReleaseProgressPercent"
+                            :editing-module-release-required-module-ids="editingModuleReleaseRequiredModuleIds"
                             :editing-module-access-duration-days="editingModuleAccessDurationDays"
                             :editing-module-requires-previous-modules="editingModuleRequiresPreviousModules"
                             :editing-module-release-dependencies="editingModuleReleaseDependencies"
@@ -2569,6 +2826,8 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                             @update:editing-module-release-mode="editingModuleReleaseMode = $event"
                             @update:editing-module-release-after-days="editingModuleReleaseAfterDays = $event"
                             @update:editing-module-release-at-date="editingModuleReleaseAtDate = $event"
+                            @update:editing-module-release-progress-percent="editingModuleReleaseProgressPercent = $event"
+                            @update:editing-module-release-required-module-ids="editingModuleReleaseRequiredModuleIds = $event"
                             @update:editing-module-access-duration-days="editingModuleAccessDurationDays = $event"
                             @update:editing-module-requires-previous-modules="editingModuleRequiresPreviousModules = $event"
                             @update:editing-module-release-dependencies="editingModuleReleaseDependencies = $event"
@@ -3372,10 +3631,12 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                             <div>
                                 <label class="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Liberação</label>
                                 <div class="grid gap-2 sm:grid-cols-3">
-                                    <select v-model="moduleModalReleaseMode" :class="inputClass" class="w-full">
+                                    <select v-model="moduleModalReleaseMode" :class="inputClass" class="w-full sm:col-span-3">
                                         <option value="none">Imediata</option>
                                         <option value="days">Após X dias</option>
                                         <option value="date">Na data</option>
+                                        <option value="progress">Ao atingir X% do curso</option>
+                                        <option value="modules">Ao concluir módulos</option>
                                     </select>
                                     <input
                                         v-if="moduleModalReleaseMode === 'days'"
@@ -3384,7 +3645,7 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                         min="1"
                                         step="1"
                                         :class="inputClass"
-                                        class="w-full"
+                                        class="w-full sm:col-span-3"
                                         placeholder="Ex.: 7"
                                     />
                                     <input
@@ -3392,9 +3653,46 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                         v-model="moduleModalReleaseAtDate"
                                         type="date"
                                         :class="inputClass"
-                                        class="w-full"
+                                        class="w-full sm:col-span-3"
                                     />
-                                    <div v-else class="hidden sm:block" />
+                                    <input
+                                        v-else-if="moduleModalReleaseMode === 'progress'"
+                                        v-model="moduleModalReleaseProgressPercent"
+                                        type="number"
+                                        min="1"
+                                        max="100"
+                                        step="1"
+                                        :class="inputClass"
+                                        class="w-full sm:col-span-3"
+                                        placeholder="Ex.: 40"
+                                    />
+                                    <div
+                                        v-else-if="moduleModalReleaseMode === 'modules'"
+                                        class="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-zinc-200 p-2 sm:col-span-3 dark:border-zinc-600"
+                                    >
+                                        <label
+                                            v-for="sec in courseStructureSections"
+                                            :key="'prereq-sec-' + sec.id"
+                                            class="block"
+                                        >
+                                            <template v-for="mod in (sec.modules || [])" :key="mod.id">
+                                                <label class="flex cursor-pointer items-center gap-2 py-0.5 text-xs text-zinc-700 dark:text-zinc-300">
+                                                    <input
+                                                        type="checkbox"
+                                                        :checked="moduleModalReleaseRequiredModuleIds.map(Number).includes(Number(mod.id))"
+                                                        @change="(e) => {
+                                                            const n = Number(mod.id);
+                                                            const cur = moduleModalReleaseRequiredModuleIds.map(Number);
+                                                            moduleModalReleaseRequiredModuleIds = e.target.checked
+                                                                ? [...cur, n]
+                                                                : cur.filter((x) => x !== n);
+                                                        }"
+                                                    />
+                                                    <span>{{ mod.title }} <span class="text-zinc-400">({{ sec.title }})</span></span>
+                                                </label>
+                                            </template>
+                                        </label>
+                                    </div>
                                 </div>
                             </div>
                             <div>

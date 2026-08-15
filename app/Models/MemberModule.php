@@ -21,6 +21,8 @@ class MemberModule extends Model
         'external_url',
         'release_after_days',
         'release_at_date',
+        'release_progress_percent',
+        'release_required_module_ids',
         'access_duration_days',
     ];
 
@@ -31,6 +33,8 @@ class MemberModule extends Model
             'show_title_on_cover' => 'boolean',
             'release_after_days' => 'integer',
             'release_at_date' => 'date:Y-m-d',
+            'release_progress_percent' => 'integer',
+            'release_required_module_ids' => 'array',
             'access_duration_days' => 'integer',
         ];
     }
