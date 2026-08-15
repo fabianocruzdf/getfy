@@ -118,7 +118,6 @@ class MemberBuilderController extends Controller
             'memberSections.modules.lessons',
             'memberSections.modules.lessons.releaseDependencies',
             'memberSections.modules.relatedProduct',
-            'memberSections.modules.releaseDependencies',
             'memberInternalProducts.relatedProduct',
             'memberTurmas.users:id,name,email',
             'memberCommunityPages',
@@ -219,10 +218,6 @@ class MemberBuilderController extends Controller
                             ? array_values(array_map('intval', $m->release_required_module_ids))
                             : [],
                         'access_duration_days' => $m->access_duration_days,
-                        'release_dependencies' => $m->releaseDependencies->map(fn ($dependency) => [
-                            'module_id' => (int) $dependency->required_member_module_id,
-                            'minimum_progress_percent' => (int) $dependency->minimum_progress_percent,
-                        ])->values()->all(),
                         'lessons' => $m->lessons->map(fn (MemberLesson $l) => [
                             'id' => $l->id,
                             'title' => $l->title,
@@ -726,7 +721,6 @@ class MemberBuilderController extends Controller
             MemberSection::query()->where('product_id', $produto->id)->whereKey($id)->update(['position' => $index + 1]);
         }
 
-        $this->pruneInvalidModuleReleaseDependencies($produto);
     }
 
     /** @param  array<int>  $orderedIds */
@@ -753,7 +747,6 @@ class MemberBuilderController extends Controller
                 ->update(['position' => $index + 1]);
         }
 
-        $this->pruneInvalidModuleReleaseDependencies($produto);
     }
 
     /** @param  array<int>  $orderedIds */
@@ -781,22 +774,6 @@ class MemberBuilderController extends Controller
         }
 
         $this->pruneInvalidLessonReleaseDependencies($module);
-    }
-
-    private function pruneInvalidModuleReleaseDependencies(Product $product): void
-    {
-        $previousModuleIds = [];
-
-        foreach ($this->orderedCourseModules($product) as $module) {
-            $dependencies = $module->releaseDependencies();
-            if ($previousModuleIds === []) {
-                $dependencies->delete();
-            } else {
-                $dependencies->whereNotIn('required_member_module_id', $previousModuleIds)->delete();
-            }
-
-            $previousModuleIds[] = (int) $module->id;
-        }
     }
 
     private function pruneInvalidLessonReleaseDependencies(MemberModule $module): void
@@ -857,12 +834,8 @@ class MemberBuilderController extends Controller
                 'release_required_module_ids' => ['nullable', 'array'],
                 'release_required_module_ids.*' => ['integer', 'exists:member_modules,id'],
                 'access_duration_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
-                'release_dependencies' => ['nullable', 'array'],
-                'release_dependencies.*.module_id' => ['required', 'integer', 'distinct'],
-                'release_dependencies.*.minimum_progress_percent' => ['required', 'integer', 'min:1', 'max:100'],
             ]);
             $validated = $this->normalizeModuleReleaseFields($validated, (string) $produto->id, null);
-            $this->assertNewModuleReleaseDependenciesAreValid($produto, $validated['release_dependencies'] ?? []);
             $max = MemberModule::where('member_section_id', $section->id)->max('position') ?? 0;
             $module = MemberModule::create([
                 'member_section_id' => $section->id,
@@ -876,7 +849,6 @@ class MemberBuilderController extends Controller
                 'release_required_module_ids' => $validated['release_required_module_ids'] ?? null,
                 'access_duration_days' => $validated['access_duration_days'] ?? null,
             ]);
-            $this->syncModuleReleaseDependencies($produto, $module, $validated['release_dependencies'] ?? []);
         } elseif ($sectionType === 'products') {
             $validated = $request->validate([
                 'title' => ['required', 'string', 'max:255'],
@@ -1012,10 +984,6 @@ class MemberBuilderController extends Controller
                 ? array_values(array_map('intval', $module->release_required_module_ids))
                 : [],
             'access_duration_days' => $module->access_duration_days,
-            'release_dependencies' => $module->releaseDependencies()->get()->map(fn ($dependency) => [
-                'module_id' => (int) $dependency->required_member_module_id,
-                'minimum_progress_percent' => (int) $dependency->minimum_progress_percent,
-            ])->values()->all(),
             'lessons' => $module->relationLoaded('lessons') ? $module->lessons->map(fn (MemberLesson $l) => [
                 'id' => $l->id,
                 'title' => $l->title,
@@ -1047,48 +1015,6 @@ class MemberBuilderController extends Controller
         }
 
         return $payload;
-    }
-
-    /**
-     * @param  array<int, array{module_id: int, minimum_progress_percent: int}>  $dependencies
-     */
-    private function syncModuleReleaseDependencies(Product $product, MemberModule $module, array $dependencies): void
-    {
-        if ($dependencies === []) {
-            $module->releaseDependencies()->delete();
-
-            return;
-        }
-        $ids = array_map(fn (array $dependency) => (int) $dependency['module_id'], $dependencies);
-        $orderedModules = $this->orderedCourseModules($product);
-        $currentIndex = $orderedModules->search(fn (MemberModule $candidate) => $candidate->id === $module->id);
-        $allowedIds = $currentIndex === false
-            ? []
-            : $orderedModules->take($currentIndex)->pluck('id')->map(fn ($id) => (int) $id)->all();
-
-        if (array_diff($ids, $allowedIds) !== []) {
-            throw ValidationException::withMessages([
-                'release_dependencies' => ['Selecione ao menos um módulo anterior válido.'],
-            ]);
-        }
-
-        $module->releaseDependencies()->delete();
-        $module->releaseDependencies()->createMany(array_map(fn (array $dependency) => [
-            'required_member_module_id' => (int) $dependency['module_id'],
-            'minimum_progress_percent' => (int) $dependency['minimum_progress_percent'],
-        ], $dependencies));
-    }
-
-    /** @param array<int, array{module_id: int, minimum_progress_percent: int}> $dependencies */
-    private function assertNewModuleReleaseDependenciesAreValid(Product $product, array $dependencies): void
-    {
-        $ids = array_values(array_unique(array_map(fn (array $dependency) => (int) $dependency['module_id'], $dependencies)));
-        $allowedIds = $this->orderedCourseModules($product)->pluck('id')->map(fn ($id) => (int) $id)->all();
-        if (array_diff($ids, $allowedIds) !== []) {
-            throw ValidationException::withMessages([
-                'release_dependencies' => ['Selecione apenas módulos anteriores válidos.'],
-            ]);
-        }
     }
 
     /** @return \Illuminate\Support\Collection<int, MemberModule> */
@@ -1163,9 +1089,6 @@ class MemberBuilderController extends Controller
                 'release_required_module_ids' => ['nullable', 'array'],
                 'release_required_module_ids.*' => ['integer', 'exists:member_modules,id'],
                 'access_duration_days' => ['nullable', 'integer', 'min:1', 'max:3650'],
-                'release_dependencies' => ['nullable', 'array'],
-                'release_dependencies.*.module_id' => ['required', 'integer', 'distinct'],
-                'release_dependencies.*.minimum_progress_percent' => ['required', 'integer', 'min:1', 'max:100'],
             ]);
             if (array_key_exists('release_at_date', $validated)
                 || array_key_exists('release_after_days', $validated)
@@ -1205,12 +1128,7 @@ class MemberBuilderController extends Controller
                 'show_title_on_cover' => ['sometimes', 'boolean'],
             ]);
         }
-        $releaseDependencies = $validated['release_dependencies'] ?? null;
-        unset($validated['release_dependencies']);
         $module->update($validated);
-        if ($sectionType === 'courses' && $releaseDependencies !== null) {
-            $this->syncModuleReleaseDependencies($produto, $module, $releaseDependencies);
-        }
         if ($request->expectsJson()) {
             return response()->json(['message' => 'Módulo atualizado.']);
         }

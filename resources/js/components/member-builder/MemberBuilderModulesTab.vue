@@ -41,9 +41,6 @@ const props = defineProps({
     editingModuleReleaseProgressPercent: { type: String, default: '' },
     editingModuleReleaseRequiredModuleIds: { type: Array, default: () => [] },
     editingModuleAccessDurationDays: { type: String, default: '' },
-    editingModuleRequiresPreviousModules: { type: Boolean, default: false },
-    editingModuleReleaseDependencies: { type: Array, default: () => [] },
-    editingModuleReleaseDependencyOptions: { type: Array, default: () => [] },
     editingModuleThumbnail: { type: String, default: null },
     moduleThumbnailUploading: { type: Boolean, default: false },
 });
@@ -92,8 +89,6 @@ const emit = defineEmits([
     'update:editingModuleReleaseProgressPercent',
     'update:editingModuleReleaseRequiredModuleIds',
     'update:editingModuleAccessDurationDays',
-    'update:editingModuleRequiresPreviousModules',
-    'update:editingModuleReleaseDependencies',
 ]);
 
 const mobileStep = ref('sections');
@@ -442,9 +437,6 @@ const columnClass = (step) => [
                         :editing-release-progress-percent="editingModuleReleaseProgressPercent"
                         :editing-release-required-module-ids="editingModuleReleaseRequiredModuleIds"
                         :editing-access-duration-days="editingModuleAccessDurationDays"
-                        :editing-requires-previous-modules="editingModuleRequiresPreviousModules"
-                        :editing-release-dependencies="editingModuleReleaseDependencies"
-                        :editing-release-dependency-options="editingModuleReleaseDependencyOptions"
                         :editing-thumbnail="editingModuleThumbnail"
                         :thumbnail-uploading="moduleThumbnailUploading"
                         :saving="moduleFormSaving"
@@ -459,8 +451,6 @@ const columnClass = (step) => [
                         @update:editing-release-progress-percent="emit('update:editingModuleReleaseProgressPercent', $event)"
                         @update:editing-release-required-module-ids="emit('update:editingModuleReleaseRequiredModuleIds', $event)"
                         @update:editing-access-duration-days="emit('update:editingModuleAccessDurationDays', $event)"
-                        @update:editing-requires-previous-modules="emit('update:editingModuleRequiresPreviousModules', $event)"
-                        @update:editing-release-dependencies="emit('update:editingModuleReleaseDependencies', $event)"
                         @save="emit('save-module')"
                         @pick-thumbnail="emit('pick-module-thumbnail')"
                         @remove-thumbnail="emit('remove-module-thumbnail')"

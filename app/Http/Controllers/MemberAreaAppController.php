@@ -1988,47 +1988,6 @@ class MemberAreaAppController extends Controller
             return $scheduleLock;
         }
 
-        $user = request()->user();
-        if (! $user instanceof User) {
-            return $scheduleLock;
-        }
-
-        $dependencies = $module->releaseDependencies()
-            ->with(['requiredModule.lessons:id,member_module_id'])
-            ->get();
-        if ($dependencies->isEmpty()) {
-            return $scheduleLock;
-        }
-
-        $lessonIds = $dependencies
-            ->flatMap(fn ($dependency) => $dependency->requiredModule?->lessons->pluck('id') ?? [])
-            ->unique()
-            ->values();
-        $completedLessonIds = MemberLessonProgress::query()
-            ->where('user_id', $user->id)
-            ->whereNotNull('completed_at')
-            ->whereIn('member_lesson_id', $lessonIds)
-            ->pluck('member_lesson_id')
-            ->flip();
-
-        foreach ($dependencies as $dependency) {
-            $requiredModule = $dependency->requiredModule;
-            $requiredLessons = $requiredModule?->lessons ?? collect();
-            $completedCount = $requiredLessons->filter(fn (MemberLesson $lesson) => isset($completedLessonIds[$lesson->id]))->count();
-            $progressPercent = $requiredLessons->isEmpty()
-                ? 0
-                : (int) floor(($completedCount / $requiredLessons->count()) * 100);
-            $minimumProgressPercent = (int) $dependency->minimum_progress_percent;
-            if ($progressPercent < $minimumProgressPercent) {
-                return [
-                    ...$scheduleLock,
-                    'is_locked' => true,
-                    'lock_message' => 'Atinja '.$minimumProgressPercent.'% no módulo '.($requiredModule?->title ?? 'anterior').' para liberar este módulo.',
-                    'lock_reason' => 'prerequisite',
-                ];
-            }
-        }
-
         return $scheduleLock;
     }
 

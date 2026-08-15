@@ -1002,8 +1002,6 @@ const editingModuleReleaseAtDate = ref('');
 const editingModuleReleaseProgressPercent = ref('');
 const editingModuleReleaseRequiredModuleIds = ref([]);
 const editingModuleAccessDurationDays = ref('');
-const editingModuleRequiresPreviousModules = ref(false);
-const editingModuleReleaseDependencies = ref([]);
 
 const sectionModalOpen = ref(false);
 const sectionModalTitle = ref('');
@@ -1030,52 +1028,6 @@ const moduleModalReleaseAtDate = ref('');
 const moduleModalReleaseProgressPercent = ref('');
 const moduleModalReleaseRequiredModuleIds = ref([]);
 const moduleModalAccessDurationDays = ref('');
-const moduleModalRequiresPreviousModules = ref(false);
-const moduleModalReleaseDependencies = ref([]);
-const moduleModalDependencyToAdd = ref('');
-
-function releaseDependencyModuleOptions(currentModuleId = null) {
-    // A ordem dos arrays é a fonte da verdade no editor: o draggable a altera
-    // imediatamente, antes de a API persistir as novas posições.
-    const modules = (courseStructureSections.value ?? []).flatMap((section) =>
-        (section.section_type ?? 'courses') === 'courses' ? (section.modules ?? []) : [],
-    );
-    if (!currentModuleId) return modules.reverse();
-    const index = modules.findIndex((module) => Number(module.id) === Number(currentModuleId));
-    return index < 0 ? [] : modules.slice(0, index).reverse();
-}
-
-const editingModuleReleaseDependencyOptions = computed(() =>
-    releaseDependencyModuleOptions(editingModuleId.value),
-);
-
-watch(editingModuleReleaseDependencyOptions, (options) => {
-    const validIds = new Set(options.map((module) => Number(module.id)));
-    const validDependencies = editingModuleReleaseDependencies.value.filter((dependency) =>
-        validIds.has(Number(dependency.module_id)),
-    );
-    if (validDependencies.length !== editingModuleReleaseDependencies.value.length) {
-        editingModuleReleaseDependencies.value = validDependencies;
-    }
-    if (validDependencies.length === 0) {
-        editingModuleRequiresPreviousModules.value = false;
-    }
-});
-
-function addReleaseDependency(dependencies, moduleId) {
-    const id = Number(moduleId);
-    if (!id || dependencies.some((dependency) => Number(dependency.module_id) === id)) return;
-    dependencies.push({ module_id: id, minimum_progress_percent: 100 });
-}
-
-function removeReleaseDependency(dependencies, moduleId) {
-    const index = dependencies.findIndex((dependency) => Number(dependency.module_id) === Number(moduleId));
-    if (index >= 0) dependencies.splice(index, 1);
-}
-
-function moduleTitle(moduleId) {
-    return releaseDependencyModuleOptions().find((module) => Number(module.id) === Number(moduleId))?.title ?? 'Módulo';
-}
 
 function openSectionEdit(section) {
     editingSectionTitle.value = section.title;
@@ -1102,13 +1054,6 @@ function openModuleEdit(mod) {
     editingModuleRelatedProductId.value = mod.related_product_id ?? null;
     editingModuleAccessType.value = mod.access_type ?? 'paid';
     editingModuleExternalUrl.value = mod.external_url ?? '';
-    editingModuleReleaseDependencies.value = Array.isArray(mod.release_dependencies)
-        ? mod.release_dependencies.map((dependency) => ({
-            module_id: Number(dependency.module_id),
-            minimum_progress_percent: Number(dependency.minimum_progress_percent ?? 100),
-        }))
-        : [];
-    editingModuleRequiresPreviousModules.value = editingModuleReleaseDependencies.value.length > 0;
     editingModuleReleaseProgressPercent.value = '';
     editingModuleReleaseRequiredModuleIds.value = [];
     if (mod.release_at_date) {
@@ -1182,14 +1127,6 @@ async function saveModuleTitle() {
             payload.release_progress_percent = null;
             payload.release_required_module_ids = [];
         }
-        if (editingModuleRequiresPreviousModules.value
-            && editingModuleReleaseDependencies.value.length === 0) {
-            alert('Selecione ao menos um módulo anterior concluído.');
-            return;
-        }
-        payload.release_dependencies = editingModuleRequiresPreviousModules.value
-            ? editingModuleReleaseDependencies.value
-            : [];
     } else if (sectionType === 'products') {
         payload.related_product_id = editingModuleRelatedProductId.value;
         payload.access_type = editingModuleAccessType.value;
@@ -1207,7 +1144,6 @@ async function saveModuleTitle() {
         const msg =
             err?.response?.data?.message
             || err?.response?.data?.errors?.release_required_module_ids?.[0]
-            || err?.response?.data?.errors?.release_dependencies?.[0]
             || err?.message
             || 'Não foi possível salvar o módulo.';
         window.alert(msg);
@@ -1762,9 +1698,6 @@ function openModuleModal(sectionId) {
     moduleModalReleaseProgressPercent.value = '';
     moduleModalReleaseRequiredModuleIds.value = [];
     moduleModalAccessDurationDays.value = '';
-    moduleModalRequiresPreviousModules.value = false;
-    moduleModalReleaseDependencies.value = [];
-    moduleModalDependencyToAdd.value = '';
     clearModuleModalFile();
     moduleModalOpen.value = true;
 }
@@ -1798,11 +1731,6 @@ async function confirmNewModule() {
     const sectionType = moduleModalSectionType.value;
     if (sectionType === 'products' && !moduleModalRelatedProductId.value) return;
     if (sectionType === 'external_links' && !moduleModalExternalUrl.value?.trim()) return;
-    if (moduleModalRequiresPreviousModules.value
-        && moduleModalReleaseDependencies.value.length === 0) {
-        alert('Selecione ao menos um módulo anterior concluído.');
-        return;
-    }
     moduleModalSaving.value = true;
     try {
         let payload = { title };
@@ -1838,9 +1766,6 @@ async function confirmNewModule() {
                 payload.release_progress_percent = null;
                 payload.release_required_module_ids = [];
             }
-            payload.release_dependencies = moduleModalRequiresPreviousModules.value
-                ? moduleModalReleaseDependencies.value
-                : [];
         } else if (sectionType === 'products') {
             payload.related_product_id = moduleModalRelatedProductId.value;
             payload.access_type = moduleModalAccessType.value;
@@ -2781,9 +2706,6 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                             :editing-module-release-progress-percent="editingModuleReleaseProgressPercent"
                             :editing-module-release-required-module-ids="editingModuleReleaseRequiredModuleIds"
                             :editing-module-access-duration-days="editingModuleAccessDurationDays"
-                            :editing-module-requires-previous-modules="editingModuleRequiresPreviousModules"
-                            :editing-module-release-dependencies="editingModuleReleaseDependencies"
-                            :editing-module-release-dependency-options="editingModuleReleaseDependencyOptions"
                             :editing-module-thumbnail="editingModule?.thumbnail"
                             :module-thumbnail-uploading="moduleThumbnailUploading"
                             @open-section-modal="openSectionModal"
@@ -2829,8 +2751,6 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                             @update:editing-module-release-progress-percent="editingModuleReleaseProgressPercent = $event"
                             @update:editing-module-release-required-module-ids="editingModuleReleaseRequiredModuleIds = $event"
                             @update:editing-module-access-duration-days="editingModuleAccessDurationDays = $event"
-                            @update:editing-module-requires-previous-modules="editingModuleRequiresPreviousModules = $event"
-                            @update:editing-module-release-dependencies="editingModuleReleaseDependencies = $event"
                         />
                     </template>
 
@@ -3710,39 +3630,6 @@ const inputClass = 'block w-full rounded-lg border border-zinc-300 bg-white px-3
                                 <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
                                     Em dias após a compra. Deixe vazio para acesso ilimitado.
                                 </p>
-                                <label class="flex items-center gap-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                                    <input
-                                        v-model="moduleModalRequiresPreviousModules"
-                                        type="checkbox"
-                                        :disabled="releaseDependencyModuleOptions().length === 0"
-                                        class="rounded border-zinc-300 text-[var(--color-primary)] focus:ring-[var(--color-primary)]"
-                                    />
-                                    Módulo(s) anterior(es) concluído(s)?
-                                </label>
-                                <template v-if="moduleModalRequiresPreviousModules">
-                                    <select
-                                        v-model="moduleModalDependencyToAdd"
-                                        :class="inputClass"
-                                        class="mt-2 w-full"
-                                        @change="addReleaseDependency(moduleModalReleaseDependencies, moduleModalDependencyToAdd); moduleModalDependencyToAdd = ''"
-                                    >
-                                        <option value="">Adicionar módulo anterior...</option>
-                                        <option v-for="module in releaseDependencyModuleOptions().filter((candidate) => !moduleModalReleaseDependencies.some((dependency) => Number(dependency.module_id) === Number(candidate.id)))" :key="module.id" :value="module.id">
-                                            {{ Number(module.id) === Number(releaseDependencyModuleOptions()[0]?.id) ? 'Módulo anterior — ' : '' }}{{ module.title }}
-                                        </option>
-                                    </select>
-                                    <div class="mt-2 space-y-2">
-                                        <div v-for="dependency in moduleModalReleaseDependencies" :key="dependency.module_id" class="flex items-center gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700">
-                                            <span class="min-w-0 flex-1 truncate">{{ moduleTitle(dependency.module_id) }}</span>
-                                            <label class="flex shrink-0 items-center gap-1 text-xs text-zinc-500">mín.
-                                                <input v-model.number="dependency.minimum_progress_percent" type="number" min="1" max="100" class="w-14 rounded border border-zinc-300 px-1.5 py-1 text-right dark:border-zinc-600 dark:bg-zinc-800" />%
-                                            </label>
-                                            <button type="button" class="text-xs text-red-600" @click="removeReleaseDependency(moduleModalReleaseDependencies, dependency.module_id)">Remover</button>
-                                        </div>
-                                    </div>
-                                    <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">A primeira opção é o módulo imediatamente anterior. O padrão de liberação é 100%.</p>
-                                </template>
-                                <p v-else-if="releaseDependencyModuleOptions().length === 0" class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Crie um módulo anterior para usar esta condição.</p>
                             </div>
                             <div>
                                 <label class="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Capa — {{ moduleModalCoverMode === 'horizontal' ? 'banner' : 'vertical' }}</label>
