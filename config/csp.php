@@ -6,9 +6,10 @@
  * Domínios extra via .env (vírgulas) para self-hosted / integrações customizadas:
  *   CSP_EXTRA_SCRIPT_SRC, CSP_EXTRA_CONNECT_SRC, CSP_EXTRA_FRAME_SRC
  *
- * Meta Conversions API Gateway / Signals Gateway usam hosts dinâmicos multi-label
- * (ex.: *.ecs.*.on.aws, *.us-central1.run.app) que CSP Level 3 não cobre com um
- * único wildcard. Nesse caso, adicione a URL do gateway em CSP_EXTRA_CONNECT_SRC.
+ * Meta Conversions API Gateway / Signals Gateway usam hosts multi-label
+ * (ex.: {id}.ecs.{region}.on.aws, {id}.{region}.run.app). CSP só aceita '*'
+ * no label mais à esquerda — por isso listamos wildcards por região comum.
+ * Se o pixel do cliente usar outra região, adicione o host em CSP_EXTRA_CONNECT_SRC.
  */
 
 $scriptSources = [
@@ -43,7 +44,42 @@ $scriptSources = [
     'https://static.cloudflareinsights.com',
 ];
 
-$connectSources = [
+/** Regiões AWS usadas pelo Meta Conversions API Gateway ({id}.ecs.{region}.on.aws). */
+$metaCapiGatewayAwsRegions = [
+    'us-west-1',
+    'us-west-2',
+    'us-east-1',
+    'us-east-2',
+    'eu-west-1',
+    'eu-central-1',
+    'sa-east-1',
+    'ap-southeast-1',
+    'ap-northeast-1',
+];
+
+/** Regiões GCP Cloud Run usadas pelo Meta Signals / CAPI Gateway ({id}.{region}.run.app). */
+$metaCapiGatewayGcpRegions = [
+    'us-central1',
+    'us-east1',
+    'us-east4',
+    'us-west1',
+    'europe-west1',
+    'europe-west2',
+    'europe-west3',
+    'southamerica-east1',
+    'asia-east1',
+    'asia-northeast1',
+];
+
+$metaGatewayConnectSources = [];
+foreach ($metaCapiGatewayAwsRegions as $region) {
+    $metaGatewayConnectSources[] = 'https://*.ecs.'.$region.'.on.aws';
+}
+foreach ($metaCapiGatewayGcpRegions as $region) {
+    $metaGatewayConnectSources[] = 'https://*.'.$region.'.run.app';
+}
+
+$connectSources = array_merge([
     "'self'",
     // Stripe
     'https://api.stripe.com',
@@ -89,7 +125,6 @@ $connectSources = [
     'https://www.google-analytics.com',
     'https://*.google-analytics.com',
     'https://analytics.google.com',
-    'https://www.google.com',
     'https://region1.google-analytics.com',
     // Utmify
     'https://api.utmify.com.br',
@@ -97,7 +132,7 @@ $connectSources = [
     // WebSocket / blobs (checkout SDKs)
     'wss:',
     'blob:',
-];
+], $metaGatewayConnectSources);
 
 $frameSources = [
     "'self'",
@@ -120,6 +155,10 @@ $frameSources = [
     'https://challenges.cloudflare.com',
     'https://*.cajupay.com.br',
     'https://checkout.pagar.me',
+    // Meta Pixel (iframe / fbevents framing)
+    'https://www.facebook.com',
+    'https://*.facebook.com',
+    'https://connect.facebook.net',
 ];
 
 return [

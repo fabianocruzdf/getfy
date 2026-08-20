@@ -29,6 +29,13 @@ class ContentSecurityPolicyTest extends TestCase
         $this->assertStringContainsString('https://graph.facebook.com', $connectSrc);
         $this->assertStringContainsString('https://*.facebook.com', $connectSrc);
         $this->assertStringContainsString('https://*.facebook.net', $connectSrc);
+        // Meta CAPI Gateway / Signals Gateway (hosts multi-label por região)
+        $this->assertStringContainsString('https://*.ecs.us-west-2.on.aws', $connectSrc);
+        $this->assertStringContainsString('https://*.us-central1.run.app', $connectSrc);
+
+        $frameSrc = implode(' ', config('csp.frame_src', []));
+        $this->assertStringContainsString('https://www.facebook.com', $frameSrc);
+        $this->assertStringContainsString('https://*.facebook.com', $frameSrc);
     }
 
     public function test_production_response_includes_cajupay_in_csp_header(): void
@@ -45,5 +52,7 @@ class ContentSecurityPolicyTest extends TestCase
         $this->assertStringContainsString('https://cdn.cajupay.com.br', $csp);
         $this->assertStringContainsString('https://api.cajupay.com.br', $csp);
         $this->assertStringContainsString('https://www.google-analytics.com', $csp);
+        $this->assertStringContainsString('https://*.ecs.us-west-2.on.aws', $csp);
+        $this->assertStringContainsString('https://www.facebook.com', $csp);
     }
 }
