@@ -27,6 +27,15 @@ import {
     dedupeContentBlocks,
 } from '@/lib/checkoutContentFormats';
 import { registerPluginCheckoutComponents } from '@/composables/usePluginCheckoutRegistry';
+import CheckoutReviews from '@/components/checkout/CheckoutReviews.vue';
+import {
+    resolveCheckoutCoreLayout,
+    isCheckoutCoreLayoutMeta,
+} from '@/components/checkout/templates/coreLayouts';
+import {
+    useCheckoutTemplate,
+    resolveCheckoutTemplateMetaFromClient,
+} from '@/composables/useCheckoutTemplate';
 import {
     PREVIEW_MESSAGE_TYPE,
     PREVIEW_ACK_TYPE,
@@ -94,7 +103,21 @@ const props = defineProps({
     cajupay_public_key: { type: String, default: '' },
     parcelado_sdk_options: { type: Object, default: () => ({}) },
     pix_parcelado_rules: { type: Object, default: null },
+    /** Template de plugin resolvido no servidor (null = original). */
+    active_checkout_template: { type: Object, default: null },
+    plugin_checkout_templates: { type: Array, default: () => [] },
 });
+
+if (typeof window !== 'undefined') {
+    window.__GETFY_CHECKOUT_SHARED__ = {
+        CheckoutForm,
+        CheckoutSummary,
+        CheckoutTimer,
+        CheckoutSidebar,
+        CheckoutReviews,
+        CheckoutMobileSummary,
+    };
+}
 
 const previewConfig = ref(null);
 const previewConfigSeq = ref(0);
@@ -185,6 +208,55 @@ const effectiveConfig = computed(() => {
         return previewConfig.value;
     }
     return props.config;
+});
+
+const checkoutTemplateMeta = computed(() => {
+    const templateId = String(effectiveConfig.value?.template || 'original').trim() || 'original';
+    if (templateId === 'original') {
+        return null;
+    }
+    if (props.active_checkout_template?.id === templateId) {
+        return props.active_checkout_template;
+    }
+    return resolveCheckoutTemplateMetaFromClient(
+        templateId,
+        props.plugin_checkout_templates,
+        page.props.plugin_ui,
+    );
+});
+
+const {
+    templateComponent,
+    templateLoading,
+} = useCheckoutTemplate(checkoutTemplateMeta, () => page.props.plugin_ui);
+
+/** Layout registrado no core via `core_layout` (plugin thin, sem bundle). */
+const coreLayoutComponent = computed(() => {
+    const meta = checkoutTemplateMeta.value;
+    if (!isCheckoutCoreLayoutMeta(meta)) {
+        return null;
+    }
+    return resolveCheckoutCoreLayout(meta.core_layout);
+});
+
+const useCoreCheckoutLayout = computed(() => coreLayoutComponent.value != null);
+
+const usePluginCheckoutLayout = computed(
+    () =>
+        !useCoreCheckoutLayout.value
+        && Boolean(templateComponent.value)
+        && checkoutTemplateMeta.value != null,
+);
+
+const checkoutUiVariant = computed(() => {
+    const fromMeta = checkoutTemplateMeta.value?.ui_variant;
+    if (typeof fromMeta === 'string' && fromMeta.trim() !== '') {
+        return fromMeta.trim();
+    }
+    if (useCoreCheckoutLayout.value) {
+        return String(checkoutTemplateMeta.value?.core_layout || 'default');
+    }
+    return 'default';
 });
 
 onUnmounted(() => {
@@ -325,7 +397,7 @@ const previewRootClass = computed(() => {
 const timerConfig = computed(() => effectiveConfig.value?.timer ?? {});
 const salesNotificationConfig = computed(() => effectiveConfig.value?.sales_notification ?? {});
 const mobileStickyFooterEnabled = computed(
-    () => effectiveConfig.value?.summary?.mobile_sticky_footer !== false
+    () => !useCoreCheckoutLayout.value && effectiveConfig.value?.summary?.mobile_sticky_footer !== false
 );
 
 /** Sentinel quando o backend não detecta país (localhost / headers ausentes). */
@@ -537,6 +609,59 @@ const mainLinePriceBrl = computed(() => {
     }
     return Number(props.product?.price_brl ?? props.product?.price ?? 0);
 });
+
+const pluginTemplateProps = computed(() => ({
+    product: props.product,
+    subscriptionPlan: props.subscription_plan,
+    config: effectiveConfig.value,
+    appliedCoupon: appliedCoupon.value,
+    selectedOrderBumps: selectedOrderBumpsList.value,
+    orderBumpsTotalBrl: orderBumpsTotalBrl.value,
+    orderBumpIds: selectedOrderBumpIds.value,
+    t,
+    displayCurrency: displayCurrency.value,
+    priceInCurrency,
+    formatPrice,
+    primaryColor: primaryColor.value,
+    productId: props.product.id,
+    productOfferId: props.product.product_offer_id ?? null,
+    subscriptionPlanId: props.product.subscription_plan_id ?? null,
+    checkoutSessionToken: props.checkout_session_token || '',
+    affiliateRef: props.affiliate_ref || '',
+    orderBumps: props.order_bumps || [],
+    availablePaymentMethods: props.available_payment_methods,
+    prefillCoupon: exitPopupAcceptedCoupon.value,
+    checkoutLocale: locale.value,
+    suggestedCountryCode: props.suggested_country_code,
+    localeStorageKey: storageKey.value,
+    cardPayeeCode: props.card_payee_code || '',
+    cardEfiSandbox: props.card_efi_sandbox,
+    cardStripePublishableKey: props.card_stripe_publishable_key || '',
+    cardStripeSandbox: props.card_stripe_sandbox,
+    cardStripeLinkEnabled: props.card_stripe_link_enabled,
+    cardInstallmentsEnabled: props.card_installments_enabled,
+    cardMaxInstallments: props.card_max_installments || 1,
+    cardMercadopagoPublicKey: props.card_mercadopago_public_key || '',
+    cardMercadopagoSandbox: props.card_mercadopago_sandbox,
+    cardPaypalClientId: props.card_paypal_client_id || '',
+    cardPaypalSandbox: props.card_paypal_sandbox,
+    cardPaypalCheckoutMode: props.card_paypal_checkout_mode || 'auto',
+    cardGatewayKeys: props.card_gateway_keys || {},
+    checkoutTotalBrl: checkoutTotalBrl.value,
+    checkoutTotalInCurrency: checkoutTotalInCurrency.value,
+    mainLinePriceBrl: mainLinePriceBrl.value,
+    currencyList: currencyList.value,
+    featuredCurrencies: featuredCurrencies.value,
+    otherCurrencies: otherCurrencies.value,
+    pluginCheckoutExtensions: props.plugin_checkout_extensions,
+    productName: props.product.name || '',
+    cajupayPayAccountId: props.cajupay_pay_account_id || '',
+    parceladoSdkOptions: props.parcelado_sdk_options || {},
+    locale: locale.value,
+    supportedLocales,
+    localeLabels,
+    uiVariant: checkoutUiVariant.value,
+}));
 
 const conversionPixels = computed(() => props.conversion_pixels || {});
 
@@ -857,7 +982,43 @@ const hasCustomBodyEnd = computed(() => String(customBodyEndHtml.value).trim() !
             />
             <CheckoutYoutube v-if="(effectiveConfig?.youtube_position ?? 'top') !== 'bottom'" :url="effectiveConfig?.youtube_url" />
 
-            <div class="checkout-layout-columns flex flex-col gap-8 lg:flex-row lg:gap-10" data-checkout="layout-columns">
+            <component
+                v-if="useCoreCheckoutLayout"
+                :is="coreLayoutComponent"
+                v-bind="pluginTemplateProps"
+                v-model:order-bump-ids="selectedOrderBumpIds"
+                @coupon-applied="onCouponApplied"
+                @coupon-cleared="onCouponCleared"
+                @payment-approved="onPaymentApproved"
+                @set-currency="onUserSetCurrency"
+                @set-locale="onUserSetLocale"
+            />
+
+            <component
+                v-else-if="usePluginCheckoutLayout"
+                :is="templateComponent"
+                v-bind="pluginTemplateProps"
+                v-model:order-bump-ids="selectedOrderBumpIds"
+                @coupon-applied="onCouponApplied"
+                @coupon-cleared="onCouponCleared"
+                @payment-approved="onPaymentApproved"
+                @set-currency="onUserSetCurrency"
+                @set-locale="onUserSetLocale"
+            />
+
+            <div
+                v-else-if="checkoutTemplateMeta && templateLoading && !useCoreCheckoutLayout"
+                class="rounded-xl border border-emerald-200 bg-white px-4 py-8 text-center text-sm text-zinc-500"
+                data-checkout="template-loading"
+            >
+                Carregando layout do checkout…
+            </div>
+
+            <div
+                v-else
+                class="checkout-layout-columns flex flex-col gap-8 lg:flex-row lg:gap-10"
+                data-checkout="layout-columns"
+            >
                 <!-- Coluna principal -->
                 <div class="w-full lg:w-2/3" data-checkout="column-primary">
                     <div

@@ -297,6 +297,7 @@ class EmailMarketingController extends Controller
             'status' => EmailCampaign::STATUS_SENDING,
             'paused_at' => null,
             'last_error' => null,
+            'backoff_until' => null,
         ]);
 
         $message = $request->boolean('retry_failures')

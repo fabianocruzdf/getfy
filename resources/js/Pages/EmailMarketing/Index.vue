@@ -45,7 +45,7 @@ const statusClass = (status) => {
 
 function confirmSend(campaign) {
     if (!props.email_configured) return;
-    if (!confirm(`Disparar campanha "${campaign.name}"? Os e-mails serão enviados em lotes de 30 por minuto.`)) return;
+    if (!confirm(`Disparar campanha "${campaign.name}"? Os e-mails serão enviados em lotes de até 30 por minuto (com pausa automática se o provedor limitar).`)) return;
     router.post(`/email-marketing/${campaign.id}/send`);
 }
 

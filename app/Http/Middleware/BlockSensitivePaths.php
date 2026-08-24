@@ -43,6 +43,10 @@ class BlockSensitivePaths
         foreach (self::BLOCKED_PREFIXES as $prefix) {
             $bare = rtrim($prefix, '/');
             if ($path === $bare || str_starts_with($path, $prefix)) {
+                // Rota pública de assets de plugins: /plugins/{slug}/assets/...
+                if ($prefix === 'plugins/' && preg_match('#^plugins/[a-z0-9\-_]+/assets(/|$)#i', $path) === 1) {
+                    continue;
+                }
                 abort(403);
             }
         }

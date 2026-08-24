@@ -11,6 +11,7 @@ use App\Events\PixGenerated;
 use App\Events\SubscriptionCreated;
 use App\Gateways\GatewayRegistry;
 use App\Plugins\PluginCheckoutExtensionRegistry;
+use App\Plugins\PluginExtensionRegistry;
 use App\Plugins\PluginHookBus;
 use App\Jobs\ProcessPaymentWebhook;
 use App\Models\Coupon;
@@ -550,6 +551,12 @@ class CheckoutController extends Controller
         $payload = PluginHookBus::applyFilters('checkout.payload', $payload, $product, $request);
 
         $payload['plugin_checkout_extensions'] = PluginCheckoutExtensionRegistry::activeForProduct($product, 'standard');
+
+        $templateId = is_array($config) ? ($config['template'] ?? 'original') : 'original';
+        $payload['active_checkout_template'] = PluginExtensionRegistry::resolveActiveCheckoutTemplate(
+            is_string($templateId) ? $templateId : 'original'
+        );
+        $payload['plugin_checkout_templates'] = PluginExtensionRegistry::getCheckoutBuilderTemplates();
 
         return Inertia::render('Checkout/Show', $payload)
             ->withViewData([

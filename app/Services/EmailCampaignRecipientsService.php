@@ -53,7 +53,18 @@ class EmailCampaignRecipientsService
     }
 
     /**
-     * Get next batch of recipients for a campaign (not yet in email_campaign_sends), max 30.
+     * Libera reservas "queued" antigas (job perdido / worker parado) para nova tentativa.
+     */
+    public function reclaimStaleQueued(EmailCampaign $campaign, int $minutes = 15): int
+    {
+        return $campaign->emailCampaignSends()
+            ->where('status', EmailCampaignSend::STATUS_QUEUED)
+            ->where('updated_at', '<=', now()->subMinutes($minutes))
+            ->delete();
+    }
+
+    /**
+     * Próximo lote de destinatários ainda não enviados / não enfileirados / sem falha permanente.
      *
      * @return Collection<int, array{email: string, user_id: int|null, name: string}>
      */
@@ -63,11 +74,16 @@ class EmailCampaignRecipientsService
         $tenantId = $campaign->tenant_id;
         $all = $this->getRecipients($tenantId, $filterConfig);
 
-        $sentEmails = $campaign->emailCampaignSends()
-            ->whereIn('status', [EmailCampaignSend::STATUS_SENT, EmailCampaignSend::STATUS_FAILED])
+        $blockedEmails = $campaign->emailCampaignSends()
+            ->whereIn('status', [
+                EmailCampaignSend::STATUS_SENT,
+                EmailCampaignSend::STATUS_FAILED,
+                EmailCampaignSend::STATUS_QUEUED,
+            ])
             ->pluck('email')
             ->flip();
-        $pending = $all->filter(fn ($r) => ! $sentEmails->has($r['email']));
+
+        $pending = $all->filter(fn ($r) => ! $blockedEmails->has($r['email']));
 
         return $pending->take($limit)->values();
     }

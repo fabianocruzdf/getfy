@@ -83,7 +83,10 @@ const configForm = reactive({
     appearance: {
         background_color: props.config?.appearance?.background_color ?? '#E3E3E3',
         primary_color: props.config?.appearance?.primary_color ?? '#0ea5e9',
+        buy_button_color: props.config?.appearance?.buy_button_color ?? '',
+        buy_button_text: props.config?.appearance?.buy_button_text ?? '',
         order_bump_color: props.config?.appearance?.order_bump_color ?? '#F59E0B',
+        order_bump_inner_color: props.config?.appearance?.order_bump_inner_color ?? '#86EFAC',
         banners: Array.isArray(props.config?.appearance?.banners)
             ? [...props.config.appearance.banners]
             : [],
@@ -396,6 +399,15 @@ watch(
 
 watch(previewViewMode, () => sendPreviewNow());
 
+watch(
+    () => configForm.template,
+    (next, prev) => {
+        if (next !== prev) {
+            refreshPreview();
+        }
+    },
+);
+
 const previewSyncedLabel = computed(() => {
     if (!previewSyncedAt.value) return null;
     const d = new Date(previewSyncedAt.value);
@@ -438,6 +450,26 @@ const advancedEditorTabs = [
     { id: 'js', label: 'JavaScript' },
 ];
 
+/** Template de plugin selecionado no Builder (meta do manifesto). */
+const selectedPluginTemplate = computed(() => {
+    const id = String(configForm.template || 'original');
+    return (props.plugin_checkout_templates || []).find((t) => t?.id === id) || null;
+});
+
+/**
+ * Features declaradas em checkout_builder_templates[].features
+ * (ex.: order_bump_inner_color) — sem hardcode de slug de plugin.
+ */
+function templateHasFeature(feature) {
+    const feats = selectedPluginTemplate.value?.features;
+    return Array.isArray(feats) && feats.includes(feature);
+}
+
+const showOrderBumpBandLabels = computed(
+    () => templateHasFeature('order_bump_band_color') || templateHasFeature('order_bump_inner_color'),
+);
+const showOrderBumpInnerColor = computed(() => templateHasFeature('order_bump_inner_color'));
+
 /** Templates de checkout disponíveis. Core + plugin_checkout_templates (manifest). */
 const availableCheckoutTemplates = computed(() => {
     const core = [
@@ -448,6 +480,9 @@ const availableCheckoutTemplates = computed(() => {
         name: t.name,
         description: t.description || '',
         plugin_slug: t.plugin_slug,
+        core_layout: t.core_layout || null,
+        ui_variant: t.ui_variant || null,
+        features: Array.isArray(t.features) ? t.features : [],
     }));
     return [...core, ...fromPlugins];
 });
@@ -728,7 +763,43 @@ const inputClass =
                             </div>
                             <div>
                                 <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                                    Cor do order bump
+                                    Cor do botão de comprar
+                                </label>
+                                <div class="flex gap-2">
+                                    <input
+                                        :value="configForm.appearance.buy_button_color || configForm.appearance.primary_color"
+                                        type="color"
+                                        class="h-10 w-14 cursor-pointer rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-600"
+                                        @input="configForm.appearance.buy_button_color = $event.target.value"
+                                    />
+                                    <input
+                                        v-model="configForm.appearance.buy_button_color"
+                                        type="text"
+                                        :class="inputClass + ' flex-1'"
+                                        placeholder="Vazio = usar cor primária"
+                                    />
+                                </div>
+                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                    Cor exclusiva do botão de finalizar compra. Deixe vazio para usar a cor primária.
+                                </p>
+                            </div>
+                            <div>
+                                <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                                    Texto do botão de comprar
+                                </label>
+                                <input
+                                    v-model="configForm.appearance.buy_button_text"
+                                    type="text"
+                                    :class="inputClass"
+                                    placeholder="Ex.: Comprar agora"
+                                />
+                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                    Se preenchido, substitui o texto padrão do botão (em todos os templates).
+                                </p>
+                            </div>
+                            <div>
+                                <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                                    {{ showOrderBumpBandLabels ? 'Cor do order bump (faixa / externo)' : 'Cor do order bump' }}
                                 </label>
                                 <div class="flex gap-2">
                                     <input
@@ -742,7 +813,34 @@ const inputClass =
                                         :class="inputClass + ' flex-1'"
                                     />
                                 </div>
-                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Cor da borda, fundo e tag "Oferta especial" dos produtos sugeridos.</p>
+                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                    <template v-if="showOrderBumpBandLabels">
+                                        Cor da faixa superior e do fundo externo do card de oferta.
+                                    </template>
+                                    <template v-else>
+                                        Cor da borda, fundo e tag "Oferta especial" dos produtos sugeridos.
+                                    </template>
+                                </p>
+                            </div>
+                            <div v-if="showOrderBumpInnerColor">
+                                <label class="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                                    Cor interna do order bump
+                                </label>
+                                <div class="flex gap-2">
+                                    <input
+                                        v-model="configForm.appearance.order_bump_inner_color"
+                                        type="color"
+                                        class="h-10 w-14 cursor-pointer rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-600"
+                                    />
+                                    <input
+                                        v-model="configForm.appearance.order_bump_inner_color"
+                                        type="text"
+                                        :class="inputClass + ' flex-1'"
+                                    />
+                                </div>
+                                <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                    Fundo da área interna da oferta neste template.
+                                </p>
                             </div>
                         </div>
                     </div>

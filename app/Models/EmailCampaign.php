@@ -30,6 +30,7 @@ class EmailCampaign extends Model
         'sent_at',
         'paused_at',
         'last_error',
+        'backoff_until',
     ];
 
     protected function casts(): array
@@ -39,9 +40,15 @@ class EmailCampaign extends Model
             'scheduled_at' => 'datetime',
             'sent_at' => 'datetime',
             'paused_at' => 'datetime',
+            'backoff_until' => 'datetime',
             'total_recipients' => 'integer',
             'sent_count' => 'integer',
         ];
+    }
+
+    public function isInBackoff(): bool
+    {
+        return $this->backoff_until !== null && $this->backoff_until->isFuture();
     }
 
     public function scopeForTenant($query, ?int $tenantId)

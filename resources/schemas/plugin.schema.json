@@ -78,6 +78,19 @@
     "product_panel": {},
     "member_area_panels": {},
     "checkout_extensions": {},
+    "checkout_builder_templates": {
+      "type": "array",
+      "description": "Templates de checkout exibidos na aba Template do Builder. Layouts conhecidos (ex.: ticto-clone) podem ser renderizados no core; plugins opcionalmente exportam frontend.exports.checkout_template.",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "description": { "type": "string" }
+        }
+      }
+    },
     "render_zones": { "type": "object" },
     "theme": { "type": "object" },
     "frontend": {
@@ -85,7 +98,16 @@
       "properties": {
         "entry": { "type": "string" },
         "manifest": { "type": "string" },
-        "exports": { "type": "object" },
+        "exports": {
+          "type": "object",
+          "description": "Mapa de slots → nome exportado no bundle. Use checkout_template para layout completo do checkout.",
+          "properties": {
+            "checkout_template": { "type": "string" },
+            "settings": { "type": "string" },
+            "tokenizeCard": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
         "pages": { "type": "object" },
         "checkout_gateway_slug": { "type": "string" },
         "member_area": { "type": "object" }

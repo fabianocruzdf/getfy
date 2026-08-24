@@ -55,7 +55,7 @@ async function previewRecipients() {
 
 function confirmSend() {
     if (!props.email_configured) return;
-    if (!confirm('Disparar esta campanha? Os e-mails serão enviados em lotes de 30 por minuto.')) return;
+    if (!confirm('Disparar esta campanha? Os e-mails serão enviados em lotes de até 30 por minuto (com pausa automática se o provedor limitar).')) return;
     router.post(`/email-marketing/${props.campaign.id}/send`);
 }
 </script>

@@ -323,7 +323,12 @@ class PluginExtensionRegistry
     /**
      * Checkout builder templates declarados nos plugins.
      *
-     * @return array<int, array{id: string, name: string, description?: string, plugin_slug: string}>
+     * Campos opcionais por template:
+     * - core_layout: chave de layout no core (ex.: "ticto") — plugin thin, sem bundle
+     * - ui_variant: skin do CheckoutForm / payment / bumps (ex.: "ticto")
+     * - features: lista de flags para o Builder (ex.: order_bump_inner_color)
+     *
+     * @return array<int, array{id: string, name: string, description: ?string, plugin_slug: string, core_layout: ?string, ui_variant: ?string, features: array<int, string>}>
      */
     public static function getCheckoutBuilderTemplates(): array
     {
@@ -337,21 +342,111 @@ class PluginExtensionRegistry
                 if (! is_array($tpl)) {
                     continue;
                 }
-                $id = trim((string) ($tpl['id'] ?? ''));
-                $name = trim((string) ($tpl['name'] ?? $id));
-                if ($id === '' || $name === '') {
-                    continue;
+                $normalized = self::normalizeCheckoutBuilderTemplate($tpl, (string) ($plugin['slug'] ?? ''));
+                if ($normalized !== null) {
+                    $items[] = $normalized;
                 }
-                $items[] = [
-                    'id' => $id,
-                    'name' => $name,
-                    'description' => isset($tpl['description']) ? trim((string) $tpl['description']) : null,
-                    'plugin_slug' => (string) $plugin['slug'],
-                ];
             }
         }
 
         return $items;
+    }
+
+    /**
+     * @param  array<string, mixed>  $tpl
+     * @return array{id: string, name: string, description: ?string, plugin_slug: string, core_layout: ?string, ui_variant: ?string, features: array<int, string>}|null
+     */
+    public static function normalizeCheckoutBuilderTemplate(array $tpl, string $pluginSlug): ?array
+    {
+        $id = trim((string) ($tpl['id'] ?? ''));
+        $name = trim((string) ($tpl['name'] ?? $id));
+        if ($id === '' || $name === '') {
+            return null;
+        }
+
+        $coreLayout = trim((string) ($tpl['core_layout'] ?? ''));
+        $uiVariant = trim((string) ($tpl['ui_variant'] ?? ''));
+        $features = [];
+        if (is_array($tpl['features'] ?? null)) {
+            foreach ($tpl['features'] as $feature) {
+                if (! is_string($feature)) {
+                    continue;
+                }
+                $feature = trim($feature);
+                if ($feature !== '') {
+                    $features[] = $feature;
+                }
+            }
+        }
+
+        return [
+            'id' => $id,
+            'name' => $name,
+            'description' => isset($tpl['description']) ? trim((string) $tpl['description']) : null,
+            'plugin_slug' => $pluginSlug,
+            'core_layout' => $coreLayout !== '' ? $coreLayout : null,
+            'ui_variant' => $uiVariant !== '' ? $uiVariant : null,
+            'features' => array_values(array_unique($features)),
+        ];
+    }
+
+    /**
+     * Resolve o template ativo do checkout público (id ≠ original).
+     *
+     * Prioridade:
+     * 1) frontend.exports.checkout_template + entry (plugin full)
+     * 2) core_layout no manifesto (plugin thin — layout no core)
+     *
+     * @return array{id: string, plugin_slug: string, export: ?string, entry: ?string, core_layout: ?string, ui_variant: ?string, features: array<int, string>}|null
+     */
+    public static function resolveActiveCheckoutTemplate(?string $templateId): ?array
+    {
+        $id = trim((string) $templateId);
+        if ($id === '' || $id === 'original') {
+            return null;
+        }
+
+        foreach (PluginRegistry::enabled() as $plugin) {
+            $templates = $plugin['checkout_builder_templates'] ?? null;
+            if (! is_array($templates)) {
+                continue;
+            }
+            $matchedTpl = null;
+            foreach ($templates as $tpl) {
+                if (! is_array($tpl)) {
+                    continue;
+                }
+                if (trim((string) ($tpl['id'] ?? '')) === $id) {
+                    $matchedTpl = $tpl;
+                    break;
+                }
+            }
+            if ($matchedTpl === null) {
+                continue;
+            }
+
+            $normalized = self::normalizeCheckoutBuilderTemplate($matchedTpl, (string) ($plugin['slug'] ?? ''));
+            if ($normalized === null) {
+                continue;
+            }
+
+            $frontend = is_array($plugin['frontend'] ?? null) ? $plugin['frontend'] : [];
+            $exports = is_array($frontend['exports'] ?? null) ? $frontend['exports'] : [];
+            $export = $exports['checkout_template'] ?? null;
+            $exportName = is_string($export) && trim($export) !== '' ? trim($export) : null;
+
+            return [
+                'id' => $normalized['id'],
+                'plugin_slug' => $normalized['plugin_slug'],
+                'export' => $exportName,
+                'entry' => $exportName ? self::resolveEntryScriptUrl($plugin) : null,
+                'core_layout' => $normalized['core_layout'],
+                'ui_variant' => $normalized['ui_variant'],
+                'features' => $normalized['features'],
+            ];
+        }
+
+        return null;
     }
 
     /**
