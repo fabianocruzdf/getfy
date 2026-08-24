@@ -116,10 +116,15 @@ class OrderReportingAmounts
      */
     public static function lineCentsBrl(Order $order, float $lineAmount): int
     {
+        // Linha grátis / zerada não herda o total do pedido (ex.: order bump free na Utmify).
+        if ($lineAmount <= 0) {
+            return 0;
+        }
+
         $totalCents = self::totalCentsBrl($order);
         $linesTotal = $order->lineItemsTotalAmount();
 
-        if ($linesTotal <= 0 || $lineAmount <= 0) {
+        if ($linesTotal <= 0) {
             return $totalCents;
         }
 

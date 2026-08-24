@@ -85,13 +85,14 @@ class UtmifyService
     }
 
     /**
-     * One UTMfy order body per order line (main + each bump), each with its own commission.
+     * One UTMfy order body per order line (main + each paid bump), each with its own commission.
+     * Order bumps free (is_free / amount 0) são ignorados — não geram POST na Utmify.
      *
      * Product filter semantics (produtos atribuídos na integração):
-     * - null / vazio → todas as linhas
+     * - null / vazio → todas as linhas pagas
      * - produto da linha está no filtro → envia a linha
-     * - produto principal do pedido (checkout) está no filtro → envia TODAS as linhas
-     *   (order bumps do mesmo checkout entram mesmo sem o produto do bump estar marcado)
+     * - produto principal do pedido (checkout) está no filtro → envia TODAS as linhas pagas
+     *   (order bumps pagos do mesmo checkout entram mesmo sem o produto do bump estar marcado)
      *
      * @param  array{approved_at?: string|null, refunded_at?: string|null, is_test?: bool}  $options
      * @param  array<int, string>|null  $onlyProductIds
@@ -103,7 +104,14 @@ class UtmifyService
         array $options = [],
         ?array $onlyProductIds = null
     ): array {
-        $order->loadMissing(['user', 'product', 'orderItems.product', 'orderItems.productOffer', 'orderItems.subscriptionPlan']);
+        $order->loadMissing([
+            'user',
+            'product',
+            'orderItems.product',
+            'orderItems.productOffer',
+            'orderItems.subscriptionPlan',
+            'orderItems.productOrderBump',
+        ]);
 
         $session = CheckoutSession::where('order_id', $order->id)->orderByDesc('id')->first();
         $apiSession = null;
@@ -196,6 +204,11 @@ class UtmifyService
         $payloads = [];
         foreach ($allItems->values() as $index => $item) {
             /** @var OrderItem $item */
+            // Order bump free: não envia venda na Utmify (só o principal / bumps pagos).
+            if ($this->isFreeOrderBumpLine($item)) {
+                continue;
+            }
+
             $productId = (string) ($item->product_id ?? '');
             if ($filterIds !== null
                 && ! $checkoutMainLinked
@@ -213,7 +226,7 @@ class UtmifyService
             }
 
             $cents = (int) ($lineCents[$index] ?? 0);
-            // Evita rejeição da API quando commission / preço ficam zerados.
+            // Evita rejeição da API quando commission / preço ficam zerados em linhas pagas.
             if ($cents <= 0) {
                 $cents = max(1, OrderReportingAmounts::lineCentsBrl($order, (float) $item->amount));
             }
@@ -243,6 +256,33 @@ class UtmifyService
         }
 
         return $payloads;
+    }
+
+    /**
+     * Order bump gratuito (is_free ou amount 0 em linha de bump) — não conta como venda na Utmify.
+     */
+    private function isFreeOrderBumpLine(OrderItem $item): bool
+    {
+        $isMainLine = (int) ($item->position ?? 0) === 0 && $item->product_order_bump_id === null;
+        if ($isMainLine) {
+            return false;
+        }
+
+        $bump = $item->productOrderBump;
+        if ($bump && $bump->is_free) {
+            return true;
+        }
+
+        if ($item->product_order_bump_id !== null && (float) $item->amount <= 0) {
+            return true;
+        }
+
+        // Legacy / sem FK do bump: linha secundária com amount 0.
+        if ((int) ($item->position ?? 0) > 0 && (float) $item->amount <= 0) {
+            return true;
+        }
+
+        return false;
     }
 
     /**

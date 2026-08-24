@@ -277,6 +277,58 @@ class OrderReportingAmountsTest extends TestCase
         );
     }
 
+    public function test_utmify_payloads_skip_free_order_bump_and_keep_only_main(): void
+    {
+        $user = User::factory()->create();
+        $main = $this->createTestProduct(['name' => 'Principal free bump', 'price' => 50]);
+        $bonus = $this->createTestProduct(['name' => 'Bônus grátis', 'price' => 47]);
+
+        $bump = \App\Models\ProductOrderBump::create([
+            'product_id' => $main->id,
+            'target_product_id' => $bonus->id,
+            'title' => 'Leve grátis',
+            'cta_title' => 'Quero',
+            'price_override' => 0,
+            'is_free' => true,
+            'position' => 1,
+        ]);
+
+        $order = Order::create([
+            'tenant_id' => 1,
+            'user_id' => $user->id,
+            'product_id' => $main->id,
+            'status' => 'completed',
+            'amount' => 50.00,
+            'currency' => 'BRL',
+            'email' => 'utmify-free-bump@example.com',
+            'gateway_id' => 'gw-free-bump-1',
+            'metadata' => ['checkout_payment_method' => 'pix'],
+        ]);
+
+        OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $main->id,
+            'amount' => 50.00,
+            'position' => 0,
+        ]);
+        OrderItem::create([
+            'order_id' => $order->id,
+            'product_id' => $bonus->id,
+            'product_order_bump_id' => $bump->id,
+            'amount' => 0,
+            'position' => 1,
+        ]);
+
+        $payloads = app(UtmifyService::class)->buildPayloads($order->fresh(), 'paid');
+
+        $this->assertCount(1, $payloads, 'Free order bump must not create a Utmify sale');
+        $this->assertSame('gw-free-bump-1', $payloads[0]['orderId']);
+        $this->assertSame(5000, $payloads[0]['commission']['totalPriceInCents']);
+        $this->assertSame(5000, $payloads[0]['products'][0]['priceInCents']);
+        $this->assertSame((string) $main->id, $payloads[0]['products'][0]['id']);
+        $this->assertSame(0, OrderReportingAmounts::lineCentsBrl($order->fresh(), 0.0));
+    }
+
     public function test_utmify_payloads_filter_by_product_keeps_line_amount_not_funnel_total(): void
     {
         $user = User::factory()->create();
