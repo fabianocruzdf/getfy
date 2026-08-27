@@ -329,13 +329,15 @@ class CajuPayDriver implements GatewayDriver
 
     /**
      * Extrai o estado de pagamento do JSON de GET /api/sdk/public/checkout/sessions/{token}.
-     * O contrato pode evoluir (campos no topo vs dentro de payment / latest_charge).
+     * O contrato CajuPay separa ciclo de vida da sessão (`status`: active/…) de
+     * liquidação (`payment_status`: pending|paid|…). Preferir payment_status — se
+     * lermos `status` primeiro, sessões pagas ficam eternamente como "active".
      *
      * @param  array<string, mixed>  $data
      */
     private function extractPublicSessionStatus(array $data): mixed
     {
-        foreach (['status', 'state', 'checkout_status', 'session_status', 'payment_status'] as $key) {
+        foreach (['payment_status', 'checkout_status', 'session_status'] as $key) {
             if (! array_key_exists($key, $data)) {
                 continue;
             }
@@ -350,18 +352,35 @@ class CajuPayDriver implements GatewayDriver
             if (! is_array($obj)) {
                 continue;
             }
-            foreach (['status', 'state'] as $key) {
+            foreach (['payment_status', 'status', 'state'] as $key) {
                 if (! array_key_exists($key, $obj)) {
                     continue;
                 }
                 $v = $obj[$key];
-                if (is_string($v) && trim($v) !== '') {
+                if (is_string($v) && trim($v) !== '' && ! $this->isSessionLifecycleOnlyStatus($v)) {
                     return $v;
                 }
             }
         }
 
+        // Último recurso: status/state da sessão (ignorar "active" = sessão aberta).
+        foreach (['status', 'state'] as $key) {
+            if (! array_key_exists($key, $data)) {
+                continue;
+            }
+            $v = $data[$key];
+            if (is_string($v) && trim($v) !== '' && ! $this->isSessionLifecycleOnlyStatus($v)) {
+                return $v;
+            }
+        }
+
         return null;
+    }
+
+    private function isSessionLifecycleOnlyStatus(string $status): bool
+    {
+        // "active"/"created" = sessão aberta na CajuPay, não resultado do pagamento.
+        return in_array(strtolower(trim($status)), ['active', 'created'], true);
     }
 
     /**
