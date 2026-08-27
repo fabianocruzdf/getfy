@@ -277,6 +277,23 @@ class GatewaysController extends Controller
             }
         }
 
+        if ($slug === 'cajupay') {
+            foreach (['public_key', 'secret_key', 'webhook_signing_secret'] as $preserveField) {
+                if (trim((string) ($credentials[$preserveField] ?? '')) === '' && ! empty($existingCredentials[$preserveField])) {
+                    $credentials[$preserveField] = $existingCredentials[$preserveField];
+                }
+            }
+            $mismatch = $this->validateCajuPaySandboxKeys($credentials);
+            if ($mismatch !== null) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $mismatch,
+                ], 422);
+            }
+            // Alinha o flag ao prefixo real das chaves (fonte da verdade na CajuPay).
+            $credentials['sandbox'] = $this->cajupayKeysAreSandbox($credentials);
+        }
+
         // Preserve existing certificate_path when nenhum novo arquivo foi enviado
         if (! empty($existingCredentials['certificate_path'])) {
             $credentials['certificate_path'] = $existingCredentials['certificate_path'];
@@ -586,6 +603,45 @@ class GatewaysController extends Controller
                 'message' => $e->getMessage() ?: 'Não foi possível aceitar o contrato PIX Parcelado.',
             ], 422);
         }
+    }
+
+    /**
+     * Chaves CajuPay de teste usam prefixo gpk_test_ / gsk_test_ (docs módulo 06).
+     *
+     * @param  array<string, mixed>  $credentials
+     */
+    private function cajupayKeysAreSandbox(array $credentials): bool
+    {
+        $public = strtolower(trim((string) ($credentials['public_key'] ?? '')));
+        $secret = strtolower(trim((string) ($credentials['secret_key'] ?? '')));
+
+        return str_starts_with($public, 'gpk_test_')
+            || str_starts_with($secret, 'gsk_test_');
+    }
+
+    /**
+     * Garante que o toggle sandbox bate com o prefixo das chaves.
+     * Chaves de teste (gpk_test_/gsk_test_) sempre implicam sandbox; chaves live
+     * não podem forçar sandbox (docs CajuPay módulo 06).
+     *
+     * @param  array<string, mixed>  $credentials
+     */
+    private function validateCajuPaySandboxKeys(array $credentials): ?string
+    {
+        $public = trim((string) ($credentials['public_key'] ?? ''));
+        $secret = trim((string) ($credentials['secret_key'] ?? ''));
+        if ($public === '' && $secret === '') {
+            return null;
+        }
+
+        $wantSandbox = filter_var($credentials['sandbox'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $keysAreTest = $this->cajupayKeysAreSandbox($credentials);
+
+        if ($wantSandbox && ! $keysAreTest) {
+            return 'Sandbox ativado: use chaves de teste do painel CajuPay (gpk_test_ / gsk_test_). Chaves live não podem forçar sandbox.';
+        }
+
+        return null;
     }
 
     /**

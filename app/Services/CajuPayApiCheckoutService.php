@@ -14,6 +14,7 @@ use App\Models\ProductOffer;
 use App\Models\SubscriptionPlan;
 use App\Models\User;
 use App\Support\CajuPayLocale;
+use App\Support\CajuPayCardSessionOptions;
 use App\Support\CajuPayPartnerCheckoutUrl;
 use App\Support\CheckoutPaymentMethodsBuilder;
 use App\Support\MoneyMinorUnits;
@@ -76,6 +77,20 @@ class CajuPayApiCheckoutService
         $description = $this->sessionDescription($session, $app);
         $externalRef = (string) Str::uuid();
 
+        $productConfig = [];
+        if ($session->product_id) {
+            $linkedProduct = Product::find($session->product_id);
+            if ($linkedProduct) {
+                $productConfig = is_array($linkedProduct->checkout_config) ? $linkedProduct->checkout_config : [];
+            }
+        } elseif ($session->product_offer_id) {
+            $offer = ProductOffer::with('product')->find($session->product_offer_id);
+            if ($offer?->product) {
+                $productConfig = is_array($offer->product->checkout_config) ? $offer->product->checkout_config : [];
+            }
+        }
+        $cardOptions = CajuPayCardSessionOptions::fromCheckoutConfig($productConfig, $paymentMethod);
+
         $driver = GatewayRegistry::driver('cajupay');
         if (! $driver) {
             throw new \RuntimeException('Driver CajuPay não disponível.');
@@ -91,7 +106,8 @@ class CajuPayApiCheckoutService
             $allowedMethods,
             $defaultMethodMap[$paymentMethod] ?? 'card',
             CajuPayLocale::fromCheckoutLocale('pt_BR'),
-            CajuPayPartnerCheckoutUrl::forApiCheckoutSession($session)
+            CajuPayPartnerCheckoutUrl::forApiCheckoutSession($session),
+            $cardOptions
         );
 
         $availableMethods = $driver->getSessionAvailableMethods($sessionResult['token'], $credentials);
@@ -119,6 +135,7 @@ class CajuPayApiCheckoutService
             'external_id' => $externalRef,
             'methods_available' => $availableMethods,
             'metadata' => $session->metadata ?? [],
+            'cajupay_card' => CajuPayCardSessionOptions::draftSnapshot($cardOptions),
             'created_at' => time(),
         ], now()->addMinutes(30));
 
@@ -356,6 +373,9 @@ class CajuPayApiCheckoutService
             'cajupay_session_token' => $draft['cajupay_token'] ?? null,
             'cajupay_checkout_session_id' => $draft['checkout_session_id'] ?? null,
         ]);
+        if (is_array($draft['cajupay_card'] ?? null)) {
+            $orderMetadata['cajupay_card'] = $draft['cajupay_card'];
+        }
         if ($chargeCurrency !== 'BRL') {
             $amountBrl = OrderReportingAmounts::estimateAmountBrl($totalAmount, $chargeCurrency, $tenantId);
             if ($amountBrl !== null && $amountBrl > 0) {

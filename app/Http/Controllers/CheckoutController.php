@@ -1866,6 +1866,10 @@ class CheckoutController extends Controller
         $allowedMethods = array_values(array_unique($allowedMethods));
 
         $externalRef = (string) Str::uuid();
+        $cardOptions = \App\Support\CajuPayCardSessionOptions::fromCheckoutConfig(
+            is_array($product->checkout_config) ? $product->checkout_config : [],
+            $method
+        );
 
         try {
             $driver = GatewayRegistry::driver('cajupay');
@@ -1887,7 +1891,8 @@ class CheckoutController extends Controller
                     $product,
                     $context['offer'] ?? null,
                     $context['plan'] ?? null
-                )
+                ),
+                $cardOptions
             );
         } catch (\Throwable $e) {
             Log::warning('CajuPaySession: falha ao criar sessão SDK', [
@@ -1929,6 +1934,7 @@ class CheckoutController extends Controller
             'tenant_id' => $product->tenant_id,
             'external_id' => $externalRef,
             'methods_available' => $availableMethods,
+            'cajupay_card' => \App\Support\CajuPayCardSessionOptions::draftSnapshot($cardOptions),
             'created_at' => time(),
         ], now()->addMinutes(30));
 
@@ -2783,6 +2789,9 @@ class CheckoutController extends Controller
             'cajupay_session_token' => $draft['cajupay_token'] ?? null,
             'cajupay_checkout_session_id' => $draft['checkout_session_id'] ?? null,
         ];
+        if (is_array($draft['cajupay_card'] ?? null)) {
+            $orderMetadata['cajupay_card'] = $draft['cajupay_card'];
+        }
         if ($chargeCurrency !== 'BRL') {
             $amountBrl = OrderReportingAmounts::estimateAmountBrl($totalAmount, $chargeCurrency, $tenantId);
             if ($amountBrl !== null && $amountBrl > 0) {

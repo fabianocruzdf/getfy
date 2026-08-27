@@ -4544,9 +4544,9 @@ function submit() {
                         </div>
                     </div>
                 </div>
-                <!-- Parcelas (Efí, Asaas e Pagar.me; Stripe, MP Brick e Asaas Card têm seu próprio) -->
+                <!-- Parcelas (Efí, Asaas e Pagar.me; CajuPay/Stripe/MP/PayPal têm seletor no próprio widget/SDK) -->
                 <div
-                    v-if="form.payment_method === 'card' && cardInstallmentsEnabled && !isCardGatewayStripe && !isCardGatewayMercadopago && !isCardGatewayAsaas && !isCardGatewayPaypal"
+                    v-if="form.payment_method === 'card' && cardInstallmentsEnabled && !isCajuPaySdkFlow && !isCardGatewayStripe && !isCardGatewayMercadopago && !isCardGatewayAsaas && !isCardGatewayPaypal"
                     class="mt-4"
                     data-checkout="form-installments"
                 >

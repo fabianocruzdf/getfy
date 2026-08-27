@@ -28,13 +28,19 @@ return [
                     'key' => 'public_key',
                     'label' => 'Chave pública',
                     'type' => 'text',
-                    'hint' => 'Chave gpk_… do painel CajuPay. Ao salvar, o Getfy registra o webhook automaticamente na API.',
+                    'hint' => 'Produção: gpk_… · Sandbox: gpk_test_… (painel CajuPay → API / Chaves). Ao salvar, o Getfy registra o webhook automaticamente.',
                 ],
                 [
                     'key' => 'secret_key',
                     'label' => 'Chave secreta',
                     'type' => 'password',
-                    'hint' => 'Chave gsk_… do painel CajuPay. Necessária junto com a chave pública.',
+                    'hint' => 'Produção: gsk_… · Sandbox: gsk_test_… Necessária junto com a chave pública.',
+                ],
+                [
+                    'key' => 'sandbox',
+                    'label' => 'Usar ambiente sandbox (chaves de teste)',
+                    'type' => 'boolean',
+                    'hint' => 'Ative com chaves gpk_test_ / gsk_test_. O SDK mostra banner de teste e cartão digitado funciona em HTTP. Chaves live (gpk_/gsk_) não podem forçar sandbox.',
                 ],
                 [
                     'key' => 'webhook_signing_secret',

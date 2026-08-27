@@ -689,8 +689,17 @@ const canTestConnection = computed(() => {
                                         type="checkbox"
                                         class="h-4 w-4 rounded border-zinc-300 text-[var(--color-primary)] focus:ring-[var(--color-primary)] dark:border-zinc-600"
                                     />
-                                    <span class="text-sm text-zinc-600 dark:text-zinc-400">Sim (somente para testes)</span>
+                                    <span class="text-sm text-zinc-600 dark:text-zinc-400">
+                                        {{ field.key === 'sandbox' ? 'Ativar' : 'Sim (somente para testes)' }}
+                                    </span>
                                 </label>
+                                <p
+                                    v-if="field.key === 'sandbox' && gateway?.slug === 'cajupay' && credentialValues.sandbox"
+                                    class="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200"
+                                >
+                                    Modo teste: use chaves <code class="font-mono">gpk_test_</code> / <code class="font-mono">gsk_test_</code>.
+                                    Cartão digitado funciona em HTTP; wallets ainda exigem HTTPS. Não libere produto real com sandbox.
+                                </p>
                             </template>
                             <select
                                 v-else-if="field.type === 'select'"

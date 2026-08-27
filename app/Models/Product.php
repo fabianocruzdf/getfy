@@ -173,6 +173,9 @@ class Product extends Model
                 'enabled' => false,
                 'max' => 1,
             ],
+            'cajupay_card' => [
+                'require_threeds' => false,
+            ],
             'pagarme_billing' => [
                 'mode' => 'customer',
                 'company_address' => [

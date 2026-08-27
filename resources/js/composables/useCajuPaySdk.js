@@ -8,8 +8,8 @@
 
 const SDK_URL = 'https://cdn.cajupay.com.br/sdk/v1/cajupay-sdk.min.js';
 const SDK_BASE_URL = 'https://api.cajupay.com.br';
-/** Bump ao exigir APIs novas do CDN (ex.: mountPixParcelado). */
-const SDK_SCRIPT_VERSION = '20260615-parcelado';
+/** Bump ao exigir APIs novas do CDN (ex.: mountPixParcelado, Cartão Brasil parcelas/3DS). */
+const SDK_SCRIPT_VERSION = '20260825-card-br';
 
 let sdkPromise = null;
 

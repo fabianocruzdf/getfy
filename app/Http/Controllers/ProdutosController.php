@@ -657,6 +657,8 @@ class ProdutosController extends Controller
             'card_installments' => ['nullable', 'array'],
             'card_installments.enabled' => ['nullable', 'boolean'],
             'card_installments.max' => ['nullable', 'integer', 'min:1', 'max:12'],
+            'cajupay_card' => ['nullable', 'array'],
+            'cajupay_card.require_threeds' => ['nullable', 'boolean'],
             'stripe_link_enabled' => ['nullable', 'boolean'],
             'email_template' => ['nullable', 'array'],
             'email_template.logo_url' => ['nullable', 'string', 'max:500'],
@@ -821,6 +823,8 @@ class ProdutosController extends Controller
         }
         $cardInstallments = $validated['card_installments'] ?? null;
         unset($validated['card_installments']);
+        $cajupayCard = $validated['cajupay_card'] ?? null;
+        unset($validated['cajupay_card']);
         $pixParceladoRules = $validated['pix_parcelado'] ?? null;
         unset($validated['pix_parcelado']);
         $stripeLinkEnabled = array_key_exists('stripe_link_enabled', $validated) ? $validated['stripe_link_enabled'] : null;
@@ -909,7 +913,7 @@ class ProdutosController extends Controller
                 'paypal' => ! empty($paymentGateways['paypal']) ? $paymentGateways['paypal'] : null,
                 'paypal_redundancy' => array_values(array_filter(array_map(fn ($s) => is_string($s) ? trim($s) : '', $paymentGateways['paypal_redundancy'] ?? []))),
                 'paypal_display_as' => in_array(($paymentGateways['paypal_display_as'] ?? 'paypal'), ['paypal', 'card'], true)
-                    ? $paymentGateways['paypal_display_as']
+                    ? ($paymentGateways['paypal_display_as'] ?? 'paypal')
                     : 'paypal',
                 'paypal_show_wallet' => filter_var($paymentGateways['paypal_show_wallet'] ?? false, FILTER_VALIDATE_BOOLEAN),
                 'crypto' => ! empty($paymentGateways['crypto']) ? $paymentGateways['crypto'] : null,
@@ -964,6 +968,12 @@ class ProdutosController extends Controller
             $config['card_installments'] = [
                 'enabled' => ! empty($cardInstallments['enabled']),
                 'max' => min(12, max(1, (int) ($cardInstallments['max'] ?? 1))),
+            ];
+            $configUpdated = true;
+        }
+        if (is_array($cajupayCard)) {
+            $config['cajupay_card'] = [
+                'require_threeds' => ! empty($cajupayCard['require_threeds']),
             ];
             $configUpdated = true;
         }

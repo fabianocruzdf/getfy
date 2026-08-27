@@ -412,6 +412,15 @@ class ProcessPaymentWebhook implements ShouldQueue
             $meta['fx_rate'] = is_string($fxRate) ? $fxRate : (string) $fxRate;
         }
 
+        $installments = $object['installments'] ?? ($object['installment_count'] ?? null);
+        if (is_numeric($installments) && (int) $installments >= 1) {
+            $meta['installments'] = (int) $installments;
+        }
+        $threedsMode = $object['threeds_mode'] ?? null;
+        if (is_string($threedsMode) && in_array($threedsMode, ['off', 'required'], true)) {
+            $meta['threeds_mode'] = $threedsMode;
+        }
+
         if ($updates !== [] || $meta !== ($order->metadata ?? [])) {
             $updates['metadata'] = $meta;
             $order->update($updates);
