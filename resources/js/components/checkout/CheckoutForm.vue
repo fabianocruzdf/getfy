@@ -13,7 +13,7 @@ import CheckoutPixInfo from './CheckoutPixInfo.vue';
 import AsaasCard from './gateways/asaas/Card.vue';
 import CajuPaySdkMount from './CajuPaySdkMount.vue';
 import CajuPayParceladoMount from './CajuPayParceladoMount.vue';
-import { buildCajuPayConsumer } from '@/composables/useCajuPaySdk';
+import { buildCajuPayConsumer, prefetchCajuPaySdk } from '@/composables/useCajuPaySdk';
 import {
     CHECKOUT_PAGARME_TOKENIZE_FORM_ID,
     PAGARME_TOKENIZE_FORM_ACTION,
@@ -910,14 +910,8 @@ onMounted(() => {
     // Não forçar showEditForm = true aqui: o watch em form.payment_method já abre o form quando o usuário escolhe PIX/Boleto.
     // Se forçássemos aqui, ao carregar com draft salvo + primeiro método = boleto/pix, os dados "fixos" e o botão Editar dados nunca apareceriam.
 
-    // Se o checkout já carrega com um método CajuPay SDK pré-selecionado (ex.: cartão
-    // como primeiro método disponível), o watch em form.payment_method NÃO dispara
-    // (watcher só reage a MUDANÇAS, não ao valor inicial). Sem isso a sessão CajuPay
-    // nunca era criada automaticamente — o cliente tinha que trocar de método e voltar
-    // pra ver o input do cartão / botão de wallet aparecer. Forçamos a criação inicial.
-    if (isCajuPaySdkFlow.value) {
-        scheduleEnsureCajuPaySession();
-    }
+    // Prefetch do script CajuPay + sessão de cartão em background (mesmo com PIX selecionado).
+    warmupCajuPaySdk();
     persistCheckoutCountry();
 });
 
@@ -1375,6 +1369,30 @@ const isCajuPayParceladoFlow = computed(() => {
         && props.displayCurrency === 'BRL';
 });
 
+/** Há algum método CajuPay SDK disponível neste checkout (pra prefetch). */
+const hasAnyCajuPaySdkMethod = computed(() => {
+    return checkoutPaymentMethods.value.some(
+        (m) => ['card', 'apple_pay', 'google_pay'].includes(m.id)
+            && String(m.gateway_slug || '').toLowerCase() === 'cajupay'
+    );
+});
+
+const hasCajuPayCardMethod = computed(() => {
+    return checkoutPaymentMethods.value.some(
+        (m) => m.id === 'card' && String(m.gateway_slug || '').toLowerCase() === 'cajupay'
+    );
+});
+
+function gatewaySlugForMethod(methodId) {
+    const m = checkoutPaymentMethods.value.find((x) => x.id === methodId);
+    return (m?.gateway_slug || '').toLowerCase();
+}
+
+function isCajuPaySdkMethodId(methodId) {
+    return ['card', 'apple_pay', 'google_pay'].includes(methodId)
+        && gatewaySlugForMethod(methodId) === 'cajupay';
+}
+
 /** Apple/Google Pay no CajuPay: o pagamento costuma concluir no botão nativo do SDK (sem o submit do formulário). */
 const isCajuPayWalletSdk = computed(() => {
     return isCajuPaySdkFlow.value
@@ -1407,7 +1425,8 @@ const cajupayPayerReadyForPrime = computed(() => {
 const cajupayMountInitialPayer = computed(() => {
     const email = (form.email || '').trim();
     const document = (form.cpf || '').replace(/\D/g, '');
-    if (form.payment_method === 'card') {
+    const method = cajupayActiveSdkMethod.value || form.payment_method;
+    if (method === 'card') {
         return { email, document };
     }
     return { name: (form.name || '').trim(), email, document };
@@ -1451,6 +1470,18 @@ const cajupayApprovedRedirectUrl = ref('');
 const cajupayMethodsAvailable = ref([]);
 /** True após POST /checkout/cajupay/confirm-order com sucesso (wallets materializam antes do 1º confirm do SDK). */
 const cajupayOrderMaterialized = ref(false);
+/**
+ * Mantém o painel/mount do SDK no DOM (v-show) ao trocar pra PIX etc. — evita remontar
+ * do zero ao voltar pro cartão. Método “preso” no mount enquanto o painel está oculto.
+ */
+const cajupayPanelKeepAlive = ref(false);
+const cajupayActiveSdkMethod = ref('');
+/** Cache de sessão por método (card|apple_pay|google_pay) + fingerprint do carrinho. */
+const cajupaySessionCache = ref({});
+let cajupayCacheFingerprint = '';
+let cajupayWarmupStarted = false;
+/** Promessas em voo por método — evita “return null” enquanto o warmup ainda cria a sessão. */
+const cajupaySessionInflight = {};
 
 const parceladoPayAccountId = ref('');
 const parceladoPaymentLinkToken = ref('');
@@ -1645,10 +1676,10 @@ function checkoutCurrencyUserSelected() {
     }
 }
 
-function buildCajuPaySessionPayload() {
+function buildCajuPaySessionPayload(methodOverride = null) {
     const payload = {
         product_id: form.product_id,
-        payment_method: form.payment_method,
+        payment_method: methodOverride || form.payment_method,
         coupon_code: (form.coupon_code || '').trim() || null,
         currency_user_selected: checkoutCurrencyUserSelected(),
     };
@@ -1667,6 +1698,70 @@ function buildCajuPaySessionPayload() {
     appendCheckoutSecurity(payload);
     appendPluginCheckoutData(payload);
     return payload;
+}
+
+function cajupaySessionFingerprint() {
+    const bumps = Array.isArray(props.orderBumpIds) ? props.orderBumpIds.join(',') : '';
+    return [
+        String(props.checkoutTotalBrl ?? ''),
+        String((form.coupon_code || '').trim()),
+        bumps,
+        String(props.productOfferId ?? ''),
+        String(props.subscriptionPlanId ?? ''),
+        String(props.displayCurrency ?? ''),
+        String(props.checkoutLocale ?? ''),
+    ].join('|');
+}
+
+function clearCajuPaySessionCache() {
+    cajupaySessionCache.value = {};
+    cajupayCacheFingerprint = '';
+}
+
+function stashCajuPaySession(methodId) {
+    if (!methodId || !cajupaySessionToken.value) return;
+    const fp = cajupaySessionFingerprint();
+    cajupayCacheFingerprint = fp;
+    cajupaySessionCache.value = {
+        ...cajupaySessionCache.value,
+        [methodId]: {
+            fingerprint: fp,
+            token: cajupaySessionToken.value,
+            polling_token: cajupayPollingToken.value,
+            methods_available: Array.isArray(cajupayMethodsAvailable.value)
+                ? [...cajupayMethodsAvailable.value]
+                : [],
+            order_materialized: cajupayOrderMaterialized.value,
+        },
+    };
+}
+
+function restoreCajuPaySession(methodId) {
+    const entry = cajupaySessionCache.value[methodId];
+    if (!entry?.token) return false;
+    if (entry.fingerprint !== cajupaySessionFingerprint()) {
+        const next = { ...cajupaySessionCache.value };
+        delete next[methodId];
+        cajupaySessionCache.value = next;
+        return false;
+    }
+    cajupaySessionToken.value = entry.token;
+    cajupayPollingToken.value = entry.polling_token || '';
+    cajupayMethodsAvailable.value = Array.isArray(entry.methods_available)
+        ? [...entry.methods_available]
+        : [];
+    cajupayOrderMaterialized.value = !!entry.order_materialized;
+    cajupayActiveSdkMethod.value = methodId;
+    cajupayPanelKeepAlive.value = true;
+    return true;
+}
+
+function clearCurrentCajuPaySessionRefs() {
+    cajupaySessionToken.value = '';
+    cajupayPollingToken.value = '';
+    cajupayMethodsAvailable.value = [];
+    cajupayOrderMaterialized.value = false;
+    stopCajuPayPolling();
 }
 
 /**
@@ -1709,57 +1804,121 @@ function validateCajuPayCustomerFields() {
     return true;
 }
 
-async function ensureCajuPaySession({ silent = false } = {}) {
-    if (!isCajuPaySdkFlow.value) return null;
-    if (cajupaySessionToken.value) return cajupaySessionToken.value;
-    if (cajupaySessionLoading.value) return null;
+async function ensureCajuPaySession({ silent = false, methodOverride = null } = {}) {
+    const method = methodOverride || form.payment_method;
+    const forCurrentUi = !methodOverride || methodOverride === form.payment_method;
+
+    if (!methodOverride && !isCajuPaySdkFlow.value) return null;
+    if (!isCajuPaySdkMethodId(method)) return null;
+
+    if (restoreCajuPaySession(method)) {
+        return cajupaySessionToken.value;
+    }
+
+    // Já temos token do método ativo (ex.: keep-alive) — não recria.
+    if (cajupaySessionToken.value && cajupayActiveSdkMethod.value === method) {
+        return cajupaySessionToken.value;
+    }
+
+    if (cajupaySessionInflight[method]) {
+        return cajupaySessionInflight[method];
+    }
     if (!cajupayMinimumFieldsReady()) return null;
 
     cajupaySessionLoading.value = true;
-    if (!silent) cajupayError.value = '';
-    try {
-        const res = await axios.post('/checkout/cajupay/session', buildCajuPaySessionPayload(), {
-            headers: {
-                'Accept': 'application/json',
-                'X-Requested-With': 'XMLHttpRequest',
-                'X-XSRF-TOKEN': getCsrfToken(),
-            },
-            withCredentials: true,
-        });
-        const data = res?.data || {};
-        if (!data.success || !data.token) {
-            cajupayError.value = data?.message || 'Não foi possível iniciar o pagamento na CajuPay.';
+    if (!silent && forCurrentUi) cajupayError.value = '';
+
+    const request = (async () => {
+        try {
+            const res = await axios.post('/checkout/cajupay/session', buildCajuPaySessionPayload(method), {
+                headers: {
+                    'Accept': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-XSRF-TOKEN': getCsrfToken(),
+                },
+                withCredentials: true,
+            });
+            const data = res?.data || {};
+            if (!data.success || !data.token) {
+                if (forCurrentUi) {
+                    cajupayError.value = data?.message || 'Não foi possível iniciar o pagamento na CajuPay.';
+                }
+                return null;
+            }
+
+            const fp = cajupaySessionFingerprint();
+            cajupayCacheFingerprint = fp;
+            cajupaySessionCache.value = {
+                ...cajupaySessionCache.value,
+                [method]: {
+                    fingerprint: fp,
+                    token: data.token,
+                    polling_token: data.polling_token || '',
+                    methods_available: Array.isArray(data.methods_available) ? data.methods_available : [],
+                    order_materialized: false,
+                },
+            };
+
+            // Warmup de cartão (mesmo com PIX na UI): ativa token + keep-alive pra montar
+            // o widget em background (painel invisível, sem display:none).
+            const shouldActivate = forCurrentUi
+                || (method === 'card' && (!cajupaySessionToken.value || cajupayActiveSdkMethod.value === 'card' || !cajupayActiveSdkMethod.value));
+            if (shouldActivate) {
+                cajupaySessionToken.value = data.token;
+                cajupayPollingToken.value = data.polling_token || '';
+                cajupayMethodsAvailable.value = Array.isArray(data.methods_available) ? data.methods_available : [];
+                cajupayOrderMaterialized.value = false;
+                cajupayActiveSdkMethod.value = method;
+                cajupayPanelKeepAlive.value = true;
+
+                if (
+                    forCurrentUi
+                    && cajupayMethodsAvailable.value.length > 0
+                    && data.method_supported === false
+                ) {
+                    cajupayError.value = cajupayMethodUnavailableMessage(method);
+                }
+            }
+
+            return data.token;
+        } catch (e) {
+            if (forCurrentUi) {
+                const msg = e?.response?.data?.message || e?.message || 'Falha ao iniciar pagamento.';
+                cajupayError.value = msg;
+            }
             return null;
+        } finally {
+            cajupaySessionLoading.value = false;
+            delete cajupaySessionInflight[method];
         }
-        cajupaySessionToken.value = data.token;
-        cajupayPollingToken.value = data.polling_token || '';
-        cajupayMethodsAvailable.value = Array.isArray(data.methods_available) ? data.methods_available : [];
+    })();
 
-        // Se a CajuPay listou methods_available e o método pedido NÃO está nela, o SDK
-        // vai falhar com method_not_available no confirm. Mostra mensagem amigável aqui
-        // pra o cliente trocar de método sem ver o erro críptico.
-        if (
-            cajupayMethodsAvailable.value.length > 0 &&
-            data.method_supported === false
-        ) {
-            cajupayError.value = cajupayMethodUnavailableMessage(form.payment_method);
-        }
-
-        return data.token;
-    } catch (e) {
-        const msg = e?.response?.data?.message || e?.message || 'Falha ao iniciar pagamento.';
-        cajupayError.value = msg;
-        return null;
-    } finally {
-        cajupaySessionLoading.value = false;
-    }
+    cajupaySessionInflight[method] = request;
+    return request;
 }
 
 function scheduleEnsureCajuPaySession() {
     if (cajupaySessionDebounce) clearTimeout(cajupaySessionDebounce);
     cajupaySessionDebounce = setTimeout(() => {
         ensureCajuPaySession({ silent: true });
-    }, 500);
+    }, 120);
+}
+
+/** Pré-carrega script + sessão + mount do cartão em background (mesmo com PIX selecionado). */
+function warmupCajuPaySdk() {
+    if (!hasAnyCajuPaySdkMethod.value) return;
+    // Script em paralelo com a criação da sessão (não espera um pelo outro).
+    prefetchCajuPaySdk().catch(() => {});
+    if (cajupayWarmupStarted) return;
+    cajupayWarmupStarted = true;
+    if (isCajuPaySdkFlow.value) {
+        ensureCajuPaySession({ silent: true });
+        return;
+    }
+    if (hasCajuPayCardMethod.value) {
+        // Sem delay: monta sessão de cartão já na entrada da página.
+        ensureCajuPaySession({ silent: true, methodOverride: 'card' });
+    }
 }
 
 async function pollCajuPayOrderStatus() {
@@ -1819,21 +1978,36 @@ function startCajuPayPolling(token) {
 
 onBeforeUnmount(() => stopCajuPayPolling());
 
-watch(() => form.payment_method, () => {
+watch(() => form.payment_method, (method, prev) => {
     cajupayError.value = '';
     parceladoError.value = '';
-    if (cajupaySessionToken.value) {
-        cajupaySessionToken.value = '';
-        cajupayPollingToken.value = '';
-        cajupayMethodsAvailable.value = [];
-        cajupayOrderMaterialized.value = false;
-        stopCajuPayPolling();
+
+    const prevWasSdk = isCajuPaySdkMethodId(prev);
+    const nextIsSdk = isCajuPaySdkFlow.value;
+
+    if (prevWasSdk && cajupaySessionToken.value && cajupayActiveSdkMethod.value === prev) {
+        stashCajuPaySession(prev);
     }
-    if (isCajuPaySdkFlow.value) {
-        scheduleEnsureCajuPaySession();
-    } else {
+
+    if (nextIsSdk) {
+        cajupayPanelKeepAlive.value = true;
+        if (!restoreCajuPaySession(method)) {
+            if (cajupayActiveSdkMethod.value && cajupayActiveSdkMethod.value !== method) {
+                clearCurrentCajuPaySessionRefs();
+            }
+            cajupayActiveSdkMethod.value = method;
+            if (!cajupaySessionToken.value) {
+                scheduleEnsureCajuPaySession();
+            }
+        }
+    } else if (prevWasSdk) {
+        // Saiu pro PIX/boleto: mantém mount oculto com a sessão anterior (não zera).
+        if (cajupaySessionCache.value[prev]) {
+            restoreCajuPaySession(prev);
+        }
         cajupayMissingFieldsHint.value = '';
     }
+
     if (isCajuPayParceladoFlow.value) {
         parceladoPaymentLinkToken.value = '';
         scheduleParceladoSessionRefresh();
@@ -1852,15 +2026,14 @@ watch(
             parceladoPaymentLinkToken.value = '';
             scheduleParceladoSessionRefresh();
         }
-        if (!isCajuPaySdkFlow.value) return;
-        if (cajupaySessionToken.value) {
-            cajupaySessionToken.value = '';
-            cajupayPollingToken.value = '';
-            cajupayMethodsAvailable.value = [];
-            cajupayOrderMaterialized.value = false;
-            stopCajuPayPolling();
+        clearCajuPaySessionCache();
+        clearCurrentCajuPaySessionRefs();
+        cajupayWarmupStarted = false;
+        if (isCajuPaySdkFlow.value) {
+            scheduleEnsureCajuPaySession();
+        } else if (hasCajuPayCardMethod.value) {
+            warmupCajuPaySdk();
         }
-        scheduleEnsureCajuPaySession();
     },
     { deep: true }
 );
@@ -1868,15 +2041,28 @@ watch(
 watch(
     () => props.checkoutLocale,
     () => {
-        if (!isCajuPaySdkFlow.value) return;
-        if (cajupaySessionToken.value) {
-            cajupaySessionToken.value = '';
-            cajupayPollingToken.value = '';
-            cajupayMethodsAvailable.value = [];
-            cajupayOrderMaterialized.value = false;
-            stopCajuPayPolling();
+        clearCajuPaySessionCache();
+        clearCurrentCajuPaySessionRefs();
+        cajupayWarmupStarted = false;
+        if (isCajuPaySdkFlow.value) {
+            scheduleEnsureCajuPaySession();
+        } else if (hasCajuPayCardMethod.value) {
+            warmupCajuPaySdk();
         }
-        scheduleEnsureCajuPaySession();
+    }
+);
+
+watch(
+    () => props.displayCurrency,
+    () => {
+        clearCajuPaySessionCache();
+        clearCurrentCajuPaySessionRefs();
+        cajupayWarmupStarted = false;
+        if (isCajuPaySdkFlow.value) {
+            scheduleEnsureCajuPaySession();
+        } else if (hasCajuPayCardMethod.value) {
+            warmupCajuPaySdk();
+        }
     }
 );
 
@@ -4105,32 +4291,39 @@ function submit() {
             />
 
             <!-- CajuPay SDK (Cartão / Apple Pay / Google Pay) -->
-            <!-- Layout leve no mobile: sem caixa branca aninhada (o SDK já traz os inputs). -->
+            <!-- Background mount: NÃO usar display:none (v-show). O SDK/iframe não
+                 termina o priming escondido assim — ao voltar pro cartão parecia “lento”.
+                 Mantemos o painel no fluxo visual só quando ativo; senão fica absoluto
+                 invisível com largura real pra montar/primar em background. -->
             <div
-                v-if="isCajuPaySdkFlow"
+                v-if="cajupayPanelKeepAlive || isCajuPaySdkFlow"
                 class="space-y-3 rounded-xl border border-gray-200 bg-white p-3 sm:space-y-4 sm:border-2 sm:border-gray-100 sm:bg-gray-50/50 sm:p-4"
+                :class="isCajuPaySdkFlow
+                    ? 'relative'
+                    : 'pointer-events-none fixed left-0 top-0 z-[-1] w-[min(100vw,26rem)] -translate-x-[110%] opacity-0'"
+                :aria-hidden="isCajuPaySdkFlow ? undefined : 'true'"
                 data-checkout="form-cajupay-panel"
             >
                 <div class="flex items-center gap-2 text-gray-700">
-                    <CreditCard v-if="form.payment_method === 'card'" class="h-5 w-5 shrink-0 text-gray-500" />
+                    <CreditCard v-if="(cajupayActiveSdkMethod || form.payment_method) === 'card'" class="h-5 w-5 shrink-0 text-gray-500" />
                     <Shield v-else class="h-5 w-5 shrink-0 text-gray-500" />
                     <span class="text-sm font-medium">
                         {{
-                            form.payment_method === 'card'
+                            (cajupayActiveSdkMethod || form.payment_method) === 'card'
                                 ? (t('checkout.dados_cartao') || 'Dados do cartão')
-                                : form.payment_method === 'apple_pay'
+                                : (cajupayActiveSdkMethod || form.payment_method) === 'apple_pay'
                                     ? labelForPaymentMethodId('apple_pay')
                                     : labelForPaymentMethodId('google_pay')
                         }}
                     </span>
                 </div>
-                <p v-if="cajupayError" class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700" role="alert">
+                <p v-if="cajupayError && isCajuPaySdkFlow" class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700" role="alert">
                     {{ cajupayError }}
                 </p>
                 <div class="-mx-1 min-w-0 sm:mx-0">
                     <CajuPaySdkMount
                         ref="cajupayMountRef"
-                        :payment-method="form.payment_method"
+                        :payment-method="cajupayActiveSdkMethod || form.payment_method"
                         :session-token="cajupaySessionToken"
                         :initial-payer="cajupayMountInitialPayer"
                         :sync-payer="cajupaySyncPayer"
@@ -4140,19 +4333,19 @@ function submit() {
                         @wallet-payment-completed="onCajuPayWalletPaymentCompleted"
                     />
                     <div
-                        v-if="!cajupaySessionToken && cajupayMissingFieldsHint && !cajupaySessionLoading"
+                        v-if="isCajuPaySdkFlow && !cajupaySessionToken && cajupayMissingFieldsHint && !cajupaySessionLoading"
                         class="mt-2 flex items-start gap-2 text-sm text-gray-600"
                     >
                         <AlertCircle class="mt-0.5 h-4 w-4 shrink-0 text-gray-500" />
                         <span>{{ cajupayMissingFieldsHint }}</span>
                     </div>
                     <div
-                        v-else-if="!cajupaySessionToken && cajupaySessionLoading"
+                        v-else-if="isCajuPaySdkFlow && !cajupaySessionToken && cajupaySessionLoading"
                         class="mt-1 h-32 animate-pulse rounded-lg bg-gray-100/80 sm:h-36"
                         aria-hidden="true"
                     />
                 </div>
-                <p v-if="cajupayPolling" class="text-xs text-gray-500">Aguardando confirmação do pagamento…</p>
+                <p v-if="cajupayPolling && isCajuPaySdkFlow" class="text-xs text-gray-500">Aguardando confirmação do pagamento…</p>
                 <button
                     v-if="isCajuPayWalletSdk"
                     type="button"

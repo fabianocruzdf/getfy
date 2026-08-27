@@ -1,6 +1,7 @@
-import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue';
+import { ref, computed, watch, onBeforeUnmount, nextTick, onMounted } from 'vue';
 import axios from 'axios';
 import { router } from '@inertiajs/vue3';
+import { prefetchCajuPaySdk } from '@/composables/useCajuPaySdk';
 
 function getCsrfToken() {
     const match = typeof document !== 'undefined' && document.cookie ? document.cookie.match(/XSRF-TOKEN=([^;]+)/) : null;
@@ -33,6 +34,8 @@ export function useApiCajuPayCheckout(options) {
     const cajupaySessionLoading = ref(false);
     const cajupayOrderMaterialized = ref(false);
     const cardSubmitting = ref(false);
+    /** Cache por método pra não recriar sessão ao voltar pro cartão. */
+    const cajupaySessionByMethod = ref({});
     let cajupayPollTimer = null;
     let cajupaySessionDebounce = null;
 
@@ -87,6 +90,30 @@ export function useApiCajuPayCheckout(options) {
         stopCajuPayPolling();
     }
 
+    function stashCajuPaySession(method) {
+        if (!method || !cajupaySessionToken.value) return;
+        cajupaySessionByMethod.value = {
+            ...cajupaySessionByMethod.value,
+            [method]: {
+                token: cajupaySessionToken.value,
+                polling_token: cajupayPollingToken.value,
+                order_materialized: cajupayOrderMaterialized.value,
+                currency: displayCurrency.value,
+            },
+        };
+    }
+
+    function restoreCajuPaySession(method) {
+        const entry = cajupaySessionByMethod.value[method];
+        if (!entry?.token || entry.currency !== displayCurrency.value) {
+            return false;
+        }
+        cajupaySessionToken.value = entry.token;
+        cajupayPollingToken.value = entry.polling_token || '';
+        cajupayOrderMaterialized.value = !!entry.order_materialized;
+        return true;
+    }
+
     function buildSessionPayload() {
         const payload = {
             session_token: sessionToken.value,
@@ -125,6 +152,7 @@ export function useApiCajuPayCheckout(options) {
             }
             cajupaySessionToken.value = data.token;
             cajupayPollingToken.value = data.polling_token || '';
+            stashCajuPaySession(paymentMethod.value);
             if (data.method_supported === false) {
                 cajupayError.value = 'Este método não está disponível na sua conta CajuPay.';
             }
@@ -295,14 +323,30 @@ export function useApiCajuPayCheckout(options) {
         }
     }
 
-    watch(paymentMethod, () => {
+    watch(paymentMethod, (method, prev) => {
+        if (['card', 'apple_pay', 'google_pay'].includes(prev)) {
+            stashCajuPaySession(prev);
+        }
+        if (['card', 'apple_pay', 'google_pay'].includes(method) && restoreCajuPaySession(method)) {
+            return;
+        }
+        resetCajuPaySession();
+        if (['card', 'apple_pay', 'google_pay'].includes(method)) {
+            scheduleEnsureCajuPaySession();
+        }
+    });
+
+    watch(displayCurrency, () => {
+        cajupaySessionByMethod.value = {};
         resetCajuPaySession();
         scheduleEnsureCajuPaySession();
     });
 
-    watch(displayCurrency, () => {
-        resetCajuPaySession();
-        scheduleEnsureCajuPaySession();
+    onMounted(() => {
+        prefetchCajuPaySdk().catch(() => {});
+        if (['card', 'apple_pay', 'google_pay'].includes(paymentMethod.value)) {
+            scheduleEnsureCajuPaySession();
+        }
     });
 
     onBeforeUnmount(() => {

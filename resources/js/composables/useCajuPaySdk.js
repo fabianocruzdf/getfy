@@ -13,6 +13,44 @@ const SDK_SCRIPT_VERSION = '20260825-card-br';
 
 let sdkPromise = null;
 
+/**
+ * Pré-carrega o script do SDK (preload + load) o quanto antes — ex.: ao abrir o checkout,
+ * mesmo antes do cliente escolher cartão.
+ *
+ * @param {{ requireParcelado?: boolean }} [options]
+ * @returns {Promise<typeof window.CajuPaySDK>}
+ */
+export function prefetchCajuPaySdk(options = {}) {
+    if (typeof document !== 'undefined') {
+        const href = `${SDK_URL}?v=${encodeURIComponent(SDK_SCRIPT_VERSION)}`;
+        const ensureLink = (rel, url, extraAttrs = {}) => {
+            if (document.querySelector(`link[data-cajupay-hint="${rel}"][href="${url}"]`)) {
+                return;
+            }
+            const link = document.createElement('link');
+            link.rel = rel;
+            link.href = url;
+            link.setAttribute('data-cajupay-hint', rel);
+            Object.entries(extraAttrs).forEach(([k, v]) => link.setAttribute(k, v));
+            document.head.appendChild(link);
+        };
+        // DNS/TLS cedo: CDN do script + API das sessões/confirm.
+        ensureLink('preconnect', 'https://cdn.cajupay.com.br', { crossorigin: 'anonymous' });
+        ensureLink('preconnect', 'https://api.cajupay.com.br', { crossorigin: 'anonymous' });
+        ensureLink('dns-prefetch', 'https://cdn.cajupay.com.br');
+        ensureLink('dns-prefetch', 'https://api.cajupay.com.br');
+        if (!document.querySelector('link[data-cajupay-preload]')) {
+            const link = document.createElement('link');
+            link.rel = 'preload';
+            link.as = 'script';
+            link.href = href;
+            link.setAttribute('data-cajupay-preload', '1');
+            document.head.appendChild(link);
+        }
+    }
+    return loadCajuPaySdk(options);
+}
+
 function cajuPaySdkHasParceladoMount(sdk) {
     if (!sdk) {
         return false;
