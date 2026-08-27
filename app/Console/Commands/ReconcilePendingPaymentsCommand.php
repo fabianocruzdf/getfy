@@ -80,6 +80,26 @@ class ReconcilePendingPaymentsCommand extends Command
 
             try {
                 $apiStatus = $driver->getTransactionStatus($transactionId, $credentials);
+                // CajuPay: se gateway_id for payment_id e a API pública da sessão tiver o paid,
+                // tenta também o token/session id do metadata.
+                if ($apiStatus !== 'paid' && $gatewaySlug === 'cajupay') {
+                    $meta = is_array($order->metadata) ? $order->metadata : [];
+                    foreach (['cajupay_session_token', 'cajupay_checkout_session_id', 'cajupay_payment_id'] as $metaKey) {
+                        $alt = isset($meta[$metaKey]) && is_string($meta[$metaKey]) ? trim($meta[$metaKey]) : '';
+                        if ($alt === '' || $alt === $transactionId) {
+                            continue;
+                        }
+                        try {
+                            $altStatus = $driver->getTransactionStatus($alt, $credentials);
+                        } catch (\Throwable) {
+                            $altStatus = null;
+                        }
+                        if ($altStatus === 'paid') {
+                            $apiStatus = 'paid';
+                            break;
+                        }
+                    }
+                }
             } catch (\Throwable) {
                 $apiStatus = null;
             }
@@ -87,9 +107,19 @@ class ReconcilePendingPaymentsCommand extends Command
             PendingPaymentReconcileSchedule::markChecked($order);
 
             if ($apiStatus === 'paid') {
-                ProcessPaymentWebhook::dispatchSync($gatewaySlug, $transactionId, 'order.paid', 'paid', [
+                $payload = [
                     'source' => 'reconcile_pending',
-                ]);
+                ];
+                // CajuPay: poll/reconcile já validou paid — ProcessPaymentWebhook não deve
+                // abortar se a 2ª consulta à API oscilar.
+                if ($gatewaySlug === 'cajupay') {
+                    $payload['getfy_order_id'] = $order->id;
+                    $meta = is_array($order->metadata) ? $order->metadata : [];
+                    if (! empty($meta['cajupay_checkout_session_id'])) {
+                        $payload['cajupay_checkout_session_id'] = $meta['cajupay_checkout_session_id'];
+                    }
+                }
+                ProcessPaymentWebhook::dispatchSync($gatewaySlug, $transactionId, 'order.paid', 'paid', $payload);
                 $paid++;
 
                 continue;

@@ -15,6 +15,7 @@ use App\Services\RefundService;
 use App\Services\CajuPaySubscriptionService;
 use App\Services\SubscriptionLifecycleService;
 use App\Support\CajuPayPaymentId;
+use App\Support\CajuPayPaidSessionBuffer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -110,18 +111,38 @@ class CajuPayWebhookController extends Controller
         }
 
         if ($order === null) {
-            if ($this->isPaidEvent($eventType) && is_string($sessionId) && $sessionId !== '') {
-                $pollingToken = Cache::get('cajupay_session_by_checkout.'.$sessionId);
+            if ($this->isPaidEvent($eventType)) {
+                $pollingToken = is_string($sessionId) && $sessionId !== ''
+                    ? Cache::get('cajupay_session_by_checkout.'.$sessionId)
+                    : null;
                 $hasDraft = is_string($pollingToken) && $pollingToken !== ''
                     && Cache::has('cajupay_draft.'.$pollingToken);
-                Log::warning('CajuPayWebhook: pagamento aprovado sem pedido no Getfy', [
+
+                // Corrida clássica: webhook paid chega antes do confirm-order.
+                // Bufferiza o paid; o confirm-order (ou retry job) aplica no pedido.
+                if ((is_string($sessionId) && $sessionId !== '') || $paymentId !== '') {
+                    CajuPayPaidSessionBuffer::store(
+                        is_string($sessionId) ? $sessionId : '',
+                        $paymentId,
+                        array_merge($payload, [
+                            'webhook_source' => 'cajupay_hmac_verified',
+                            'buffered_event' => $eventType,
+                        ])
+                    );
+                    \App\Jobs\RetryCajuPayBufferedPaid::dispatch(
+                        is_string($sessionId) ? $sessionId : '',
+                        $paymentId
+                    )->delay(now()->addSeconds(8));
+                }
+
+                Log::warning('CajuPayWebhook: pagamento aprovado sem pedido no Getfy (bufferizado)', [
                     'event' => $eventType,
                     'session_id' => $sessionId,
                     'payment_id' => $paymentId,
                     'draft_still_in_cache' => $hasDraft,
                     'hint' => $hasDraft
-                        ? 'Cliente pode ter pago na wallet antes do confirm-order; peça para preencher dados e usar "Tentar novamente".'
-                        : 'Verifique se confirm-order foi chamado antes do pagamento.',
+                        ? 'Webhook paid antes do confirm-order; buffer + retry aplicados.'
+                        : 'Pedido não encontrado; bufferado por session/payment id.',
                 ]);
             } else {
                 Log::debug('CajuPayWebhook: order not found', [
@@ -140,28 +161,31 @@ class CajuPayWebhookController extends Controller
             $order->refresh();
         }
 
-        if ($paymentId !== '' && $order->gateway_id !== $paymentId) {
-            $meta = is_array($order->metadata) ? $order->metadata : [];
-            $preservePixAutoSubscriptionId = ($meta['checkout_payment_method'] ?? '') === 'pix_auto'
-                && trim((string) ($meta['cajupay_subscription_id'] ?? $order->gateway_id ?? '')) !== '';
-            if (! $preservePixAutoSubscriptionId) {
-                try {
-                    $order->update(['gateway_id' => $paymentId]);
-                    $order->refresh();
-                } catch (\Throwable $e) {
-                    Log::debug('CajuPayWebhook: falha ao atualizar gateway_id', [
-                        'order_id' => $order->id,
-                        'error' => $e->getMessage(),
-                    ]);
-                }
+        // NÃO sobrescrever gateway_id (checkout_session_id) com payment_id no paid:
+        // o lookup do webhook/reconcile depende do session id. O payment_id fica em metadata.
+        // Exceção: se gateway_id ainda estiver vazio, preenche com paymentId ou sessionId.
+        if (($order->gateway_id === null || $order->gateway_id === '') && ($paymentId !== '' || (is_string($sessionId) && $sessionId !== ''))) {
+            try {
+                $order->update(['gateway_id' => $paymentId !== '' ? $paymentId : $sessionId]);
+                $order->refresh();
+            } catch (\Throwable $e) {
+                Log::debug('CajuPayWebhook: falha ao preencher gateway_id vazio', [
+                    'order_id' => $order->id,
+                    'error' => $e->getMessage(),
+                ]);
             }
         }
 
-        $dispatchId = $paymentId !== ''
-            ? $paymentId
-            : (string) ($order->gateway_id ?: $sessionId ?: '');
+        $dispatchId = (is_string($sessionId) && $sessionId !== '')
+            ? $sessionId
+            : ($paymentId !== '' ? $paymentId : (string) ($order->gateway_id ?: ''));
         $refundId = is_array($object) && is_string($object['refund_id'] ?? null) ? $object['refund_id'] : null;
-        $webhookMeta = array_merge($payload, ['webhook_source' => 'cajupay_hmac_verified']);
+        $webhookMeta = array_merge($payload, [
+            'webhook_source' => 'cajupay_hmac_verified',
+            'getfy_order_id' => $order->id,
+            'cajupay_checkout_session_id' => $sessionId,
+            'cajupay_payment_id' => $paymentId !== '' ? $paymentId : null,
+        ]);
 
         switch ($eventType) {
             case 'pix_parcelado.installment.paid':

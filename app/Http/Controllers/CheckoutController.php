@@ -2035,6 +2035,17 @@ class CheckoutController extends Controller
 
         event(new OrderPending($order->fresh()));
 
+        // Webhook paid pode ter chegado antes desta materialização — aplica agora.
+        try {
+            \App\Support\CajuPayPaidSessionBuffer::applyToOrderIfBuffered($order->fresh());
+            $order->refresh();
+        } catch (\Throwable $e) {
+            Log::warning('CajuPayConfirmOrder: falha ao aplicar paid bufferizado', [
+                'order_id' => $order->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
         $redirectUrl = $product->checkout_config['redirect_after_purchase'] ?? null;
         $redirectUrl = ! empty($redirectUrl) && is_string($redirectUrl) ? $redirectUrl : null;
 
@@ -3277,7 +3288,13 @@ class CheckoutController extends Controller
                                 (string) $order->gateway_id,
                                 'order.paid',
                                 'paid',
-                                ['source' => 'order_status_poll']
+                                [
+                                    'source' => 'order_status_poll',
+                                    'getfy_order_id' => $order->id,
+                                    'cajupay_checkout_session_id' => is_array($orderMeta)
+                                        ? ($orderMeta['cajupay_checkout_session_id'] ?? null)
+                                        : null,
+                                ]
                             );
                             $order->refresh();
                         }

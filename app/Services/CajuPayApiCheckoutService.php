@@ -199,6 +199,16 @@ class CajuPayApiCheckoutService
         $order = $this->createOrderFromDraft($request, $session, $draft, $validated);
         event(new OrderPending($order->fresh()));
 
+        try {
+            \App\Support\CajuPayPaidSessionBuffer::applyToOrderIfBuffered($order->fresh());
+            $order->refresh();
+        } catch (\Throwable $e) {
+            Log::warning('CajuPayApiCheckout: falha ao aplicar paid bufferizado', [
+                'order_id' => $order->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
         $session->update(['order_id' => $order->id]);
 
         session()->put('cajupay_display.' . $pollingToken, [
