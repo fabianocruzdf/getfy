@@ -497,17 +497,19 @@ class CajuPayDriver implements GatewayDriver
         ];
 
         // Cartão Brasil (módulo 06): parcelamento sem juros + require_card_threeds.
-        // Só no trilho allow_card — wallets/Stripe Global não usam estes flags.
-        if ($allowCard) {
+        // Só quando o caller passou flags (fluxo payment_method=card). Wallets omitem.
+        if ($allowCard && array_key_exists('allow_card_installments', $cardOptions)) {
             $allowInstallments = ! empty($cardOptions['allow_card_installments']);
             $maxInstallments = min(12, max(1, (int) ($cardOptions['card_max_installments'] ?? 1)));
             if ($allowInstallments && $maxInstallments >= 2) {
                 $body['allow_card_installments'] = true;
                 $body['card_max_installments'] = $maxInstallments;
+            } else {
+                $body['allow_card_installments'] = false;
             }
-            if (! empty($cardOptions['require_card_threeds'])) {
-                $body['require_card_threeds'] = true;
-            }
+        }
+        if ($allowCard && ! empty($cardOptions['require_card_threeds'])) {
+            $body['require_card_threeds'] = true;
         }
 
         // initial_payer só é enviado quando temos dados REAIS do cliente. A CajuPay

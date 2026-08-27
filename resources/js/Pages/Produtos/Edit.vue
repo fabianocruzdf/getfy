@@ -2451,7 +2451,10 @@ function submit() {
                                             <div class="flex items-center justify-between rounded-xl border border-zinc-100 bg-white px-4 py-3 dark:border-zinc-700 dark:bg-zinc-800/50">
                                                 <div class="min-w-0">
                                                     <p class="text-sm font-medium text-zinc-700 dark:text-zinc-300">Permitir parcelamento</p>
-                                                    <p class="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">Cliente poderá parcelar no cartão de crédito ({{ cardInstallmentsGatewayLabel(form.payment_gateways.card) }})</p>
+                                                    <p class="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                                                        Opcional. Se desligado, o cartão cobra só à vista (1x). Com {{ cardInstallmentsGatewayLabel(form.payment_gateways.card) }}, o seletor de parcelas aparece no checkout
+                                                        <template v-if="form.payment_gateways.card === 'cajupay'"> (dentro do SDK)</template>.
+                                                    </p>
                                                 </div>
                                                 <Toggle v-model="form.card_installments.enabled" class="shrink-0" />
                                             </div>

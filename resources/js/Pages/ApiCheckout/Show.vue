@@ -262,6 +262,7 @@ const {
     isWalletMethod,
     cajupayPayerReadyForPrime,
     cajupayInitialPayer,
+    cajupaySyncPayer,
     resetCajuPaySession,
     scheduleEnsureCajuPaySession,
     submitCajuPaySdkFlow,
@@ -928,15 +929,19 @@ async function submitCard(ev) {
 
                         <!-- CajuPay SDK: cartão embed, Apple Pay, Google Pay -->
                         <template v-else-if="canPayWithCajuPaySdk">
-                            <div class="rounded-xl border-2 border-zinc-200 bg-zinc-50/30 p-4 space-y-4">
+                            <div class="space-y-3 rounded-xl border border-zinc-200 bg-white p-3 sm:space-y-4 sm:border-2 sm:bg-zinc-50/30 sm:p-4">
                                 <p v-if="cajupayError" class="text-sm text-red-600" role="alert">{{ cajupayError }}</p>
-                                <p v-if="cajupaySessionLoading" class="text-sm text-zinc-500">Carregando checkout seguro...</p>
-                                <div id="api-cajupay-method" class="min-h-[120px] rounded-lg border border-zinc-200 bg-white" />
+                                <div
+                                    v-if="!cajupaySessionToken && cajupaySessionLoading"
+                                    class="h-32 animate-pulse rounded-lg bg-zinc-100"
+                                    aria-hidden="true"
+                                />
                                 <CajuPaySdkMount
                                     ref="cajupayMountRef"
                                     :payment-method="selectedMethod"
                                     :session-token="cajupaySessionToken"
                                     :initial-payer="cajupayInitialPayer"
+                                    :sync-payer="cajupaySyncPayer"
                                     container-id="api-cajupay-method"
                                     :before-wallet-prime="beforeCajuPayWalletPrime"
                                     :payer-ready-for-prime="cajupayPayerReadyForPrime"

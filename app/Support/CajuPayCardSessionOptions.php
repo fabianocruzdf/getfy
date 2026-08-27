@@ -37,6 +37,9 @@ final class CajuPayCardSessionOptions
         if ($enabled && $max >= 2) {
             $options['allow_card_installments'] = true;
             $options['card_max_installments'] = $max;
+        } else {
+            // Explícito: produto sem parcelamento → sessão só à vista (não herdar default da conta).
+            $options['allow_card_installments'] = false;
         }
 
         $cajupayCard = is_array($merged['cajupay_card'] ?? null) ? $merged['cajupay_card'] : [];

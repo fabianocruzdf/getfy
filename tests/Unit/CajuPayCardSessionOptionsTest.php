@@ -37,7 +37,7 @@ class CajuPayCardSessionOptionsTest extends TestCase
     }
 
     #[Test]
-    public function omits_installments_when_max_is_one(): void
+    public function disables_installments_when_max_is_one(): void
     {
         $config = array_replace_recursive(Product::defaultCheckoutConfig(), [
             'card_installments' => ['enabled' => true, 'max' => 1],
@@ -46,8 +46,22 @@ class CajuPayCardSessionOptionsTest extends TestCase
 
         $options = CajuPayCardSessionOptions::fromCheckoutConfig($config, 'card');
 
-        $this->assertArrayNotHasKey('allow_card_installments', $options);
+        $this->assertFalse($options['allow_card_installments']);
+        $this->assertArrayNotHasKey('card_max_installments', $options);
         $this->assertArrayNotHasKey('require_card_threeds', $options);
+    }
+
+    #[Test]
+    public function disables_installments_when_toggle_off(): void
+    {
+        $config = array_replace_recursive(Product::defaultCheckoutConfig(), [
+            'card_installments' => ['enabled' => false, 'max' => 6],
+        ]);
+
+        $options = CajuPayCardSessionOptions::fromCheckoutConfig($config, 'card');
+
+        $this->assertFalse($options['allow_card_installments']);
+        $this->assertArrayNotHasKey('card_max_installments', $options);
     }
 
     #[Test]

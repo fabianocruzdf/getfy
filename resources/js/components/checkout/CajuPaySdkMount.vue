@@ -5,7 +5,16 @@ import { mountCajuPayCheckout, confirmCajuPayController, cajupayDefaultMethodFor
 const props = defineProps({
     paymentMethod: { type: String, required: true },
     sessionToken: { type: String, default: '' },
+    /**
+     * Pré-preenchimento no mount do widget. No cartão, omita `name` para não
+     * copiar o nome do comprador para o campo "titular do cartão" do SDK.
+     */
     initialPayer: { type: Object, default: () => ({}) },
+    /**
+     * Dados enviados em setPayer (priming / sync). Pode incluir `name` mesmo
+     * quando initialPayer não pré-preenche o titular.
+     */
+    syncPayer: { type: Object, default: null },
     containerId: { type: String, default: 'cajupay-method' },
     /** Apple/Google Pay: chamado imediatamente antes do 1º `confirm()` do SDK (materializar Order no Getfy). */
     beforeWalletPrime: { type: Function, default: null },
@@ -38,6 +47,12 @@ const containerSelector = computed(() => `#${props.containerId}`);
 const needsPriming = computed(() => ['card', 'apple_pay', 'google_pay'].includes(props.paymentMethod));
 const isCardMethod = computed(() => props.paymentMethod === 'card');
 const isWalletMethod = computed(() => props.paymentMethod === 'apple_pay' || props.paymentMethod === 'google_pay');
+
+function payerForSync() {
+    const sync = props.syncPayer && typeof props.syncPayer === 'object' ? props.syncPayer : null;
+    const initial = props.initialPayer && typeof props.initialPayer === 'object' ? props.initialPayer : {};
+    return sync || initial;
+}
 
 function destroyController() {
     try {
@@ -121,11 +136,17 @@ async function primeCardField() {
 
     // Sincroniza o payer ANTES da cobrança ser criada no PSP. Sem isso, a 1ª
     // confirm pode falhar com payer_name_required dependendo da config da sessão.
-    setCajuPayPayer(controller.value, {
-        name: props.initialPayer?.name,
-        email: props.initialPayer?.email,
-        document: props.initialPayer?.document,
-    });
+    // No cartão NÃO enviamos name aqui: o SDK preenche o campo "Nome do Titular"
+    // com esse valor. Nome do comprador só vai no confirm final (host setPayer).
+    const payer = payerForSync();
+    const syncPayload = {
+        email: payer?.email,
+        document: payer?.document,
+    };
+    if (!isCardMethod.value && payer?.name) {
+        syncPayload.name = payer.name;
+    }
+    setCajuPayPayer(controller.value, syncPayload);
 
     try {
         if (isWalletMethod.value && typeof props.beforeWalletPrime === 'function') {
@@ -181,7 +202,7 @@ watch(() => props.paymentMethod, () => {
 // que ele preenche.
 let primeRetryTimer = null;
 watch(
-    () => [props.payerReadyForPrime, props.initialPayer],
+    () => [props.payerReadyForPrime, props.initialPayer, props.syncPayer],
     () => {
         if (!needsPriming.value) return;
         if (!controller.value) return;
@@ -242,15 +263,17 @@ defineExpose({
 </script>
 
 <template>
-    <div class="space-y-2">
+    <div class="relative w-full min-w-0">
         <!--
-            Container do SDK CajuPay. NÃO usamos min-height aqui: o SDK monta o iframe/widget
-            com a altura própria (cartão ~150px, wallets ~60px). Forçar altura
-            mínima criava espaço em branco visível embaixo do widget. O SDK também controla
-            seu próprio fundo / borda interna; mantemos o wrapper transparente.
+            Container do SDK. Sem min-height (altura vem do widget). Sem texto
+            "Carregando…" — só um pulso discreto enquanto o iframe sobe.
         -->
-        <div :id="containerId"></div>
-        <div v-if="loading" class="text-xs text-gray-500">Carregando checkout CajuPay…</div>
-        <div v-if="error" class="text-xs text-red-600">{{ error }}</div>
+        <div
+            :id="containerId"
+            class="w-full min-w-0 [&_iframe]:max-w-full"
+            :class="{ 'min-h-[8rem] animate-pulse rounded-lg bg-gray-50/80': loading && !error }"
+            :aria-busy="loading"
+        />
+        <p v-if="error" class="mt-2 text-sm text-red-600" role="alert">{{ error }}</p>
     </div>
 </template>

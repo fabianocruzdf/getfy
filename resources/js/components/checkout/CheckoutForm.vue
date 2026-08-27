@@ -1399,6 +1399,27 @@ const cajupayPayerReadyForPrime = computed(() => {
     return true;
 });
 
+/**
+ * Pré-preenchimento do widget no mount. No cartão NÃO enviamos `name` — o SDK
+ * copia isso para o campo "nome do titular", e o nome do comprador (ex.: rascunho
+ * "teste") não deve aparecer no cartão.
+ */
+const cajupayMountInitialPayer = computed(() => {
+    const email = (form.email || '').trim();
+    const document = (form.cpf || '').replace(/\D/g, '');
+    if (form.payment_method === 'card') {
+        return { email, document };
+    }
+    return { name: (form.name || '').trim(), email, document };
+});
+
+/** Dados reais do pagador para setPayer (priming / confirm) — inclui nome. */
+const cajupaySyncPayer = computed(() => ({
+    name: (form.name || '').trim(),
+    email: (form.email || '').trim(),
+    document: (form.cpf || '').replace(/\D/g, ''),
+}));
+
 const checkoutChargeCurrency = computed(() => {
     const c = props.displayCurrency;
     return typeof c === 'string' && c.trim() ? c.trim().toUpperCase() : 'BRL';
@@ -4084,18 +4105,15 @@ function submit() {
             />
 
             <!-- CajuPay SDK (Cartão / Apple Pay / Google Pay) -->
-            <!-- Mesmo padrão visual do painel do Stripe: outer com border-2/bg-gray-50/50, header
-                 com ícone + título e o widget do SDK dentro de um box branco arredondado. -->
+            <!-- Layout leve no mobile: sem caixa branca aninhada (o SDK já traz os inputs). -->
             <div
                 v-if="isCajuPaySdkFlow"
-                class="space-y-4 rounded-xl border-2 border-gray-100 bg-gray-50/50 p-4"
+                class="space-y-3 rounded-xl border border-gray-200 bg-white p-3 sm:space-y-4 sm:border-2 sm:border-gray-100 sm:bg-gray-50/50 sm:p-4"
                 data-checkout="form-cajupay-panel"
             >
                 <div class="flex items-center gap-2 text-gray-700">
-                    <span class="flex h-8 w-8 shrink-0 items-center justify-center">
-                        <CreditCard v-if="form.payment_method === 'card'" class="h-5 w-5 text-gray-500" />
-                        <Shield v-else class="h-5 w-5 text-gray-500" />
-                    </span>
+                    <CreditCard v-if="form.payment_method === 'card'" class="h-5 w-5 shrink-0 text-gray-500" />
+                    <Shield v-else class="h-5 w-5 shrink-0 text-gray-500" />
                     <span class="text-sm font-medium">
                         {{
                             form.payment_method === 'card'
@@ -4109,44 +4127,36 @@ function submit() {
                 <p v-if="cajupayError" class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700" role="alert">
                     {{ cajupayError }}
                 </p>
-                <div class="rounded-xl border-2 border-gray-100 bg-white px-4 py-3">
-                    <!--
-                        initial-payer aqui é só o pré-preenchimento do widget no MOUNT.
-                        Os dados que vão pro /confirm da CajuPay vêm do controller.setPayer()
-                        chamado em submitCajuPaySdkFlow() — assim o cliente pode preencher
-                        nome/email/CPF DEPOIS de o widget estar montado e tudo funciona.
-                        Não mandamos `phone` porque o SDK ignora (não vai no /confirm).
-                    -->
+                <div class="-mx-1 min-w-0 sm:mx-0">
                     <CajuPaySdkMount
                         ref="cajupayMountRef"
                         :payment-method="form.payment_method"
                         :session-token="cajupaySessionToken"
-                        :initial-payer="{ name: form.name, email: form.email, document: (form.cpf || '').replace(/\D/g, '') }"
+                        :initial-payer="cajupayMountInitialPayer"
+                        :sync-payer="cajupaySyncPayer"
                         :before-wallet-prime="beforeCajuPayWalletPrime"
                         :payer-ready-for-prime="cajupayPayerReadyForPrime"
                         container-id="cajupay-method"
                         @wallet-payment-completed="onCajuPayWalletPaymentCompleted"
                     />
                     <div
-                        v-if="!cajupaySessionToken && (cajupaySessionLoading || cajupayMissingFieldsHint)"
-                        class="flex items-center gap-2 text-sm text-gray-600"
+                        v-if="!cajupaySessionToken && cajupayMissingFieldsHint && !cajupaySessionLoading"
+                        class="mt-2 flex items-start gap-2 text-sm text-gray-600"
                     >
-                        <Loader2 v-if="cajupaySessionLoading" class="h-4 w-4 shrink-0 animate-spin text-gray-500" />
-                        <AlertCircle v-else class="h-4 w-4 shrink-0 text-gray-500" />
-                        <span>
-                            {{
-                                cajupaySessionLoading
-                                    ? 'Inicializando pagamento seguro…'
-                                    : cajupayMissingFieldsHint
-                            }}
-                        </span>
+                        <AlertCircle class="mt-0.5 h-4 w-4 shrink-0 text-gray-500" />
+                        <span>{{ cajupayMissingFieldsHint }}</span>
                     </div>
+                    <div
+                        v-else-if="!cajupaySessionToken && cajupaySessionLoading"
+                        class="mt-1 h-32 animate-pulse rounded-lg bg-gray-100/80 sm:h-36"
+                        aria-hidden="true"
+                    />
                 </div>
                 <p v-if="cajupayPolling" class="text-xs text-gray-500">Aguardando confirmação do pagamento…</p>
                 <button
                     v-if="isCajuPayWalletSdk"
                     type="button"
-                    class="mt-2 w-full text-center text-xs font-medium text-gray-500 underline decoration-gray-400 hover:text-gray-700"
+                    class="mt-1 w-full text-center text-xs font-medium text-gray-500 underline decoration-gray-400 hover:text-gray-700"
                     @click="submitCajuPaySdkFlow(form.payment_method)"
                 >
                     Pagamento não concluiu? Tentar novamente

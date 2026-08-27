@@ -52,7 +52,21 @@ export function useApiCajuPayCheckout(options) {
         return true;
     });
 
-    const cajupayInitialPayer = computed(() => ({
+    const cajupayInitialPayer = computed(() => {
+        const email = customerEmail.value;
+        const document = (customerCpf.value || '').replace(/\D/g, '');
+        // Cartão: não pré-preenche titular com nome/e-mail do comprador.
+        if (paymentMethod.value === 'card') {
+            return { email, document };
+        }
+        return {
+            name: (customerName.value || '').trim() || email,
+            email,
+            document,
+        };
+    });
+
+    const cajupaySyncPayer = computed(() => ({
         name: (customerName.value || '').trim() || customerEmail.value,
         email: customerEmail.value,
         document: (customerCpf.value || '').replace(/\D/g, ''),
@@ -310,6 +324,7 @@ export function useApiCajuPayCheckout(options) {
         isWalletMethod,
         cajupayPayerReadyForPrime,
         cajupayInitialPayer,
+        cajupaySyncPayer,
         resetCajuPaySession,
         ensureCajuPaySession,
         scheduleEnsureCajuPaySession,
