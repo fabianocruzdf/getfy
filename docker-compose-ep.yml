@@ -33,8 +33,8 @@ services:
       APP_ENV: ${GETFY_APP_ENV:-production}
       APP_DEBUG: ${GETFY_APP_DEBUG:-false}
 
-      APP_URL: ${GETFY_APP_URL:-https://tukfy-getfy-open.hvssda.easypanel.host}
-      GETFY_APP_URL: ${GETFY_APP_URL:-https://tukfy-getfy-open.hvssda.easypanel.host}
+      APP_URL: ${GETFY_APP_URL:-https://getfy.ibma.com.br}
+      GETFY_APP_URL: ${GETFY_APP_URL:-https://getfy.ibma.com.br}
 
       APP_INSTALLED: ${GETFY_APP_INSTALLED:-true}
       APP_AUTO_MIGRATE: ${GETFY_APP_AUTO_MIGRATE:-false}
@@ -172,8 +172,8 @@ services:
       APP_ENV: ${GETFY_APP_ENV:-production}
       APP_DEBUG: ${GETFY_APP_DEBUG:-false}
 
-      APP_URL: ${GETFY_APP_URL:-https://tukfy-getfy-open.hvssda.easypanel.host}
-      GETFY_APP_URL: ${GETFY_APP_URL:-https://tukfy-getfy-open.hvssda.easypanel.host}
+      APP_URL: ${GETFY_APP_URL:-https://getfy.ibma.com.br}
+      GETFY_APP_URL: ${GETFY_APP_URL:-https://getfy.ibma.com.br}
 
       APP_INSTALLED: ${GETFY_APP_INSTALLED:-true}
       APP_AUTO_MIGRATE: ${GETFY_APP_AUTO_MIGRATE:-false}
